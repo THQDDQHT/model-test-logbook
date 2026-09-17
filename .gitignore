@@ -1,0 +1,21 @@
+# 运行数据（记录库 + 附件），不入库；只保留占位文件
+data/*
+!data/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# 依赖与构建产物
+node_modules/
+dist/
+*.tar.gz
+*.zip
+
+# 本地杂项
+.DS_Store
+*.log
+.env
+.env.local
+.idea/
+.vscode/

@@ -1,0 +1,43 @@
+# 模型测试记录台 · docker compose
+#
+#   mkdir -p data                 # 先建好（保证是当前用户所有）
+#   docker compose up -d --build  # 本地构建并启动
+#   docker compose up -d          # 直接用已发布镜像
+#   docker compose logs -f
+#   docker compose down
+#
+# 打开 http://127.0.0.1:8788
+
+services:
+  logbook:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/thqddqht/model-test-logbook:latest
+    container_name: model-test-logbook
+    restart: unless-stopped
+    ports:
+      # 想换端口就改左边，例如 "9000:8788"
+      - "8788:8788"
+    environment:
+      # 记录时间按这个时区显示
+      TZ: Asia/Shanghai
+      # 数据落在容器内的 /app/data（下面挂出来）
+      DATA_DIR: /app/data
+      # 首次启动是否写入 3 条示例记录；不想要就设成 0
+      SEED: "1"
+    volumes:
+      # 记录库（records.db）与附件（files/）都在这里，备份直接复制这个目录
+      - ./data:/app/data
+    # Linux 上如果宿主机目录属主不是当前用户、容器写不进去，取消下面这行的注释：
+    # user: "0:0"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8788/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

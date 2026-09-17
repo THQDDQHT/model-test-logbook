@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>模型测试记录台 · Model Test Logbook</title>
+    <meta name="description" content="本地优先的模型测试记录台：保存提示词与模型结果（文字 / HTML / Markdown / 图片），提供免鉴权的自动登记接口。" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23c96442'/%3E%3Cpath d='M9 22V10h5.2a4 4 0 0 1 0 8H11' stroke='%23fffaf4' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='22' cy='21' r='2' fill='%23fffaf4'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="appShell">
+      <!-- ───────────────────────── 侧边栏 ───────────────────────── -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-fixed">
+          <div class="sidebar-head">
+            <div class="brand-row">
+              <span class="brand-mark" aria-hidden="true">
+                <svg viewBox="0 0 32 32" width="20" height="20">
+                  <path d="M9 22V10h5.2a4 4 0 0 1 0 8H11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+                  <circle cx="22" cy="21" r="2.1" fill="currentColor" />
+                </svg>
+              </span>
+              <div class="brand-text when-expanded">
+                <strong>模型测试记录台</strong>
+                <span>Model Test Logbook</span>
+              </div>
+            </div>
+            <button class="icon-button" id="sidebarToggle" type="button" title="收起 / 展开侧栏" aria-label="收起或展开侧栏">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h16" /></svg>
+            </button>
+          </div>
+
+          <button class="button primary block" id="newRecordButton" type="button">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            <span class="when-expanded">新建记录</span>
+          </button>
+
+          <nav class="nav" id="nav">
+            <button class="nav-item active" data-view="list" type="button" title="全部记录">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
+              <span class="when-expanded">全部记录</span>
+              <em class="nav-count when-expanded" id="navCountAll">0</em>
+            </button>
+            <button class="nav-item" data-view="batches" type="button" title="测试批次">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M5 7v12h14V7M9 11h6" /></svg>
+              <span class="when-expanded">测试批次</span>
+              <em class="nav-count when-expanded" id="navCountBatches">0</em>
+            </button>
+            <button class="nav-item" data-view="compare" type="button" title="结果对比">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M4 8h5M4 16h5M15 8h5M15 16h5" /></svg>
+              <span class="when-expanded">结果对比</span>
+              <em class="nav-count when-expanded" id="navCountCompare">0</em>
+            </button>
+            <button class="nav-item" data-view="stats" type="button" title="统计概览">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V10M12 20V4M19 20v-7" /></svg>
+              <span class="when-expanded">统计概览</span>
+            </button>
+            <button class="nav-item" data-view="docs" type="button" title="接口文档">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5zM9 9h6M9 13h6M9 17h4" /></svg>
+              <span class="when-expanded">接口文档</span>
+              <em class="nav-count when-expanded badge-dot" title="免鉴权">开放</em>
+            </button>
+          </nav>
+        </div>
+
+        <div class="sidebar-scroll" id="sidebarScroll">
+          <div class="filter-group when-expanded" id="filterGroup">
+            <div class="filter-head">
+              <span>筛选</span>
+              <button class="link-button" id="clearFilters" type="button">清空</button>
+            </div>
+
+            <section class="filter-block">
+              <h4>时间范围</h4>
+              <div class="chip-row" id="rangeFilter"></div>
+            </section>
+
+            <section class="filter-block">
+              <h4>结果类型</h4>
+              <div class="chip-row" id="typeFilter"></div>
+            </section>
+
+            <section class="filter-block">
+              <h4>状态</h4>
+              <div class="chip-row" id="statusFilter"></div>
+            </section>
+
+            <section class="filter-block">
+              <h4>模型 <em id="modelFilterHint"></em></h4>
+              <div class="facet-list" id="modelFilter"></div>
+            </section>
+
+            <section class="filter-block">
+              <h4>标签 <em id="tagFilterHint"></em></h4>
+              <div class="facet-list tags" id="tagFilter"></div>
+            </section>
+
+            <section class="filter-block">
+              <h4>批次</h4>
+              <div class="facet-list" id="batchFilter"></div>
+            </section>
+          </div>
+        </div>
+
+        <div class="sidebar-foot" id="sidebarFoot">
+          <div class="foot-row when-expanded"><span>记录总数</span><strong id="footTotal">—</strong></div>
+          <div class="foot-row when-expanded"><span>数据后端</span><strong id="footBackend">—</strong></div>
+          <div class="foot-row when-expanded"><span>占用空间</span><strong id="footSize">—</strong></div>
+          <div class="foot-actions">
+            <button class="icon-button" id="themeToggle" type="button" title="切换深浅色">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+            </button>
+            <button class="icon-button" id="exportButton" type="button" title="导出全部记录">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M8 11l4 4 4-4M5 20h14" /></svg>
+            </button>
+            <button class="icon-button" id="refreshButton" type="button" title="刷新数据">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" /></svg>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ───────────────────────── 主区域 ───────────────────────── -->
+      <main class="main">
+        <header class="topbar">
+          <button class="icon-button mobile-only" id="mobileMenu" type="button" aria-label="菜单">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+          </button>
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.6-3.6" /></svg>
+            <input id="searchInput" type="search" placeholder="搜索提示词、结果、模型、标签…" autocomplete="off" spellcheck="false" />
+            <kbd>/</kbd>
+          </div>
+          <div class="topbar-right">
+            <label class="select-wrap">
+              <span class="visually-hidden">排序</span>
+              <select id="sortSelect">
+                <option value="desc">最新在前</option>
+                <option value="asc">最早在前</option>
+              </select>
+            </label>
+            <label class="select-wrap">
+              <span class="visually-hidden">每页数量</span>
+              <select id="pageSizeSelect">
+                <option value="20">20 条/页</option>
+                <option value="50" selected>50 条/页</option>
+                <option value="100">100 条/页</option>
+                <option value="200">200 条/页</option>
+              </select>
+            </label>
+            <span class="result-count" id="resultCount">—</span>
+          </div>
+        </header>
+
+        <div class="content" id="content">
+          <div class="loading-state">正在加载…</div>
+        </div>
+      </main>
+    </div>
+
+    <div class="modal-root" id="modalRoot" hidden></div>
+    <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

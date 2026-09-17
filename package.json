@@ -1,0 +1,35 @@
+{
+  "name": "model-test-logbook",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "本地优先的模型测试记录台：保存提示词与模型结果（文字 / HTML / Markdown / 图片），提供免鉴权的自动登记接口。零运行时依赖。",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "docker:build": "docker build -t model-test-logbook ."
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.0"
+  },
+  "keywords": [
+    "llm",
+    "model-testing",
+    "prompt",
+    "logbook",
+    "sqlite",
+    "zero-dependency",
+    "html-render"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/THQDDQHT/model-test-logbook.git"
+  },
+  "homepage": "https://github.com/THQDDQHT/model-test-logbook#readme",
+  "bugs": {
+    "url": "https://github.com/THQDDQHT/model-test-logbook/issues"
+  }
+}

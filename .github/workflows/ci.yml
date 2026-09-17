@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 测试 · Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.x', '24.x']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: 安装开发依赖（只有 jsdom，运行本身零依赖）
+        run: npm ci
+
+      - name: 跑测试
+        run: npm test
+
+      - name: 冒烟 · 真启动服务并打一次登记接口
+        run: |
+          set -euo pipefail
+          node server.mjs --port 0 --data-dir "$RUNNER_TEMP/mtl" --no-seed > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 40); do
+            URL=$(grep -o 'http://127.0.0.1:[0-9]*' "$RUNNER_TEMP/server.log" | head -1 || true)
+            [ -n "${URL:-}" ] && break
+            sleep 0.25
+          done
+          [ -n "${URL:-}" ] || { echo "服务没起来："; cat "$RUNNER_TEMP/server.log"; exit 1; }
+          echo "服务地址 $URL"
+
+          curl -sS "$URL/health" | tee "$RUNNER_TEMP/health.json"
+          node -e "const h=require('$RUNNER_TEMP/health.json'); if(!h.ok||h.backend!=='sqlite') process.exit(1)"
+
+          curl -sS -X POST "$URL/api/records" -H 'Content-Type: application/json' \
+            -d '{"model":"ci","prompt":"冒烟测试","result":"ok","result_type":"text"}' > "$RUNNER_TEMP/record.json"
+          node -e "const r=require('$RUNNER_TEMP/record.json'); if(!r.ok||!r.id) process.exit(1)"
+
+          curl -sS "$URL/api/records?limit=5" | node -e "
+            let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+              const j=JSON.parse(s);
+              if (j.total !== 1) { console.error('期望 1 条记录，实际', j.total); process.exit(1); }
+              console.log('登记与查询 OK');
+            });"
+
+          kill %1 || true
+
+  docker:
+    name: 镜像能构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建（不推送，只验证 Dockerfile）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: model-test-logbook:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 跑起来打一次接口
+        run: |
+          set -euo pipefail
+          docker run -d --name mtl-ci -p 18788:8788 -e SEED=0 model-test-logbook:ci
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:18788/health > /tmp/health.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/health.json
+          node -e "const h=require('/tmp/health.json'); if(!h.ok) process.exit(1)"
+          curl -sf http://127.0.0.1:18788/ | head -3
+          docker logs mtl-ci | tail -20
+          docker rm -f mtl-ci
