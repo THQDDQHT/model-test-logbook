@@ -14,6 +14,8 @@ echo
 
 post "1) 文本结果" '{
   "model": "gpt-5.1",
+  "reasoning_effort": "high",
+  "harness": "codex",
   "prompt": "用三句话解释什么是 RAG。",
   "result": "RAG 把检索与生成拼在一起：先找资料，再让模型带着资料回答。",
   "tags": ["示例", "文本"],

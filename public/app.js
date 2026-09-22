@@ -41,6 +41,9 @@ const RANGES = [
   { id: '30d', label: '近 30 天' },
 ];
 
+const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const HARNESSES = ['codex', 'claude-code', 'cursor', 'openai-api'];
+
 const state = {
   view: 'list',
   records: [],
@@ -49,8 +52,18 @@ const state = {
   limit: 50,
   order: 'desc',
   loading: false,
-  filters: { q: '', models: [], tags: [], types: [], status: [], batch_id: '', range: 'all' },
-  facets: { models: [], tags: [], types: [], statuses: [], batches: [] },
+  filters: {
+    q: '',
+    models: [],
+    tags: [],
+    types: [],
+    status: [],
+    reasoning_efforts: [],
+    harnesses: [],
+    batch_id: '',
+    range: 'all',
+  },
+  facets: { models: [], tags: [], types: [], statuses: [], reasoning_efforts: [], harnesses: [], batches: [] },
   stats: null,
   compare: [],
   ui: {}, // recordId -> { mode, promptOpen, full }
@@ -628,6 +641,8 @@ function renderRecordCard(record, { detail = false } = {}) {
       </div>
       <div class="record-head-right">
         ${record.model ? `<span class="badge model">${esc(record.model)}</span>` : ''}
+        ${record.reasoning_effort ? `<span class="badge">思考 ${esc(record.reasoning_effort)}</span>` : ''}
+        ${record.harness ? `<span class="badge">Harness ${esc(record.harness)}</span>` : ''}
         <span class="badge type">${esc(typeLabel(record.result_type))}</span>
         ${statusBadge(record)}
       </div>
@@ -839,6 +854,8 @@ function renderCompare() {
           <span>${esc(fmtAbs(record.created_at_ms))}</span>
           ${record.latency_ms ? `<span class="dot"></span><span>${fmtNum(record.latency_ms)} ms</span>` : ''}
           ${record.total_tokens ? `<span class="dot"></span><span>${fmtNum(record.total_tokens)} tokens</span>` : ''}
+          ${record.reasoning_effort ? `<span class="dot"></span><span>思考 ${esc(record.reasoning_effort)}</span>` : ''}
+          ${record.harness ? `<span class="dot"></span><span>Harness ${esc(record.harness)}</span>` : ''}
         </div>
         <div class="badge-row">${record.tags.map((t) => `<span class="badge">#${esc(t)}</span>`).join('')}</div>
       </div>
@@ -1005,7 +1022,7 @@ function renderDocs() {
   const base = location.origin;
   const endpoints = [
     ['POST', '/api/records', '登记一条记录（支持数组批量，单次最多 200 条）'],
-    ['GET', '/api/records', '列表：q / model / tag / batch / type / status / from / to / limit / offset / order'],
+    ['GET', '/api/records', '列表：q / model / tag / batch / type / status / reasoning_effort / harness / from / to / limit / offset / order'],
     ['GET', '/api/records/:id', '单条详情'],
     ['PATCH', '/api/records/:id', '更新标题 / 标签 / 批次 / meta 等'],
     ['DELETE', '/api/records/:id', '删除一条'],
@@ -1034,6 +1051,8 @@ function renderDocs() {
   const aliases = [
     ['prompt', 'prompt / prompt_text / input / user_prompt / question / query / messages'],
     ['model', 'model / model_name / model_id / engine'],
+    ['reasoning_effort', 'reasoning_effort（标准字段，不做别名兼容）'],
+    ['harness', 'harness（标准字段，不做别名兼容）'],
     ['result', 'result / output / response / content / answer / completion / text / html'],
     ['parts', 'parts / results / outputs / items / blocks（多段结果，数组）'],
     ['result_type', 'result_type / format / output_type / content_type / type（不传自动推断）'],
@@ -1059,6 +1078,8 @@ function renderDocs() {
   -H 'Content-Type: application/json' \\
   -d '{
     "model": "gpt-5.1",
+    "reasoning_effort": "high",
+    "harness": "codex",
     "prompt": "用三句话解释 RAG",
     "result": "第一句……",
     "tags": ["rag", "文本"],
@@ -1121,7 +1142,7 @@ function renderDocs() {
       title: '⑦ 读取列表 / 按批次对比',
       code: `curl "${base}/api/records?limit=20&order=desc"
 curl "${base}/api/records?batch=2026-09-17%20UI%20%E5%AF%B9%E6%AF%94"
-curl "${base}/api/records?q=RAG&model=gpt-5.1&type=html"`,
+curl "${base}/api/records?reasoning_effort=high&harness=codex"`,
     },
   ]
     .map(
@@ -1187,6 +1208,8 @@ curl "${base}/api/records?q=RAG&model=gpt-5.1&type=html"`,
   "created_at_local": "2026-09-17 11:48:12",
   "title": "用三句话解释 RAG",
   "model": "gpt-5.1",
+  "reasoning_effort": "high",
+  "harness": "codex",
   "result_type": "text",
   "url": "${base}/r/rec_mf3k9x_7f3a1c"
 }`)}</pre>
@@ -1217,6 +1240,22 @@ function renderFacets() {
     if (!hit) return '';
     return `<button class="chip ${state.filters.status.includes(s.id) ? 'active' : ''}" data-act="status" data-value="${s.id}">${esc(s.label)} ${hit.count}</button>`;
   }).join('') || '<span class="facet-empty">暂无</span>';
+
+  $('#reasoningFilter').innerHTML = facets.reasoning_efforts.length
+    ? facets.reasoning_efforts
+        .map(
+          (item) => `<button class="chip ${state.filters.reasoning_efforts.includes(item.reasoning_effort) ? 'active' : ''}" data-act="reasoning" data-value="${esc(item.reasoning_effort)}">${esc(item.reasoning_effort)} ${item.count}</button>`,
+        )
+        .join('')
+    : '<span class="facet-empty">暂无</span>';
+
+  $('#harnessFilter').innerHTML = facets.harnesses.length
+    ? facets.harnesses
+        .map(
+          (item) => `<button class="chip ${state.filters.harnesses.includes(item.harness) ? 'active' : ''}" data-act="harness" data-value="${esc(item.harness)}">${esc(item.harness)} ${item.count}</button>`,
+        )
+        .join('')
+    : '<span class="facet-empty">暂无</span>';
 
   $('#modelFilterHint').textContent = `${facets.models.length} 个`;
   $('#modelFilter').innerHTML = facets.models.length
@@ -1365,6 +1404,8 @@ function openDetail(record) {
     body: `
       <div class="detail-meta">
         ${record.model ? `<span class="badge model">${esc(record.model)}</span>` : ''}
+        ${record.reasoning_effort ? `<span class="badge">思考 ${esc(record.reasoning_effort)}</span>` : ''}
+        ${record.harness ? `<span class="badge">Harness ${esc(record.harness)}</span>` : ''}
         <span class="badge">${esc(typeLabel(record.result_type))}</span>
         ${statusBadge(record)}
         ${(record.tags || []).map((t) => `<span class="badge">#${esc(t)}</span>`).join('')}
@@ -1833,6 +1874,14 @@ function recordFormBody(record = {}) {
   const resultFile = uploadState.resultFile;
   const modelOptions = state.facets.models.map((m) => `<option value="${esc(m.model)}"></option>`).join('');
   const batchOptions = state.facets.batches.map((b) => `<option value="${esc(b.name)}"></option>`).join('');
+  const reasoningOptions = [...new Set([...REASONING_EFFORTS, ...state.facets.reasoning_efforts.map((item) => item.reasoning_effort)])]
+    .filter(Boolean)
+    .map((value) => `<option value="${esc(value)}"></option>`)
+    .join('');
+  const harnessOptions = [...new Set([...HARNESSES, ...state.facets.harnesses.map((item) => item.harness)])]
+    .filter(Boolean)
+    .map((value) => `<option value="${esc(value)}"></option>`)
+    .join('');
   const localTime = record.created_at_ms ? new Date(record.created_at_ms - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
   return `
     <div class="field">
@@ -1861,6 +1910,18 @@ function recordFormBody(record = {}) {
         <select id="f-status">
           ${STATUSES.map((s) => `<option value="${s.id}" ${(record.status || 'ok') === s.id ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
         </select>
+      </div>
+    </div>
+    <div class="field-row" style="margin-top:12px">
+      <div class="field">
+        <label for="f-reasoning">思考等级</label>
+        <input class="input" id="f-reasoning" list="reasoning-options" value="${esc(record.reasoning_effort || '')}" placeholder="none / low / medium / high">
+        <datalist id="reasoning-options">${reasoningOptions}</datalist>
+      </div>
+      <div class="field">
+        <label for="f-harness">Harness</label>
+        <input class="input" id="f-harness" list="harness-options" value="${esc(record.harness || '')}" placeholder="codex / claude-code / cursor">
+        <datalist id="harness-options">${harnessOptions}</datalist>
       </div>
     </div>
     <div class="field" style="margin-top:12px">
@@ -1917,6 +1978,8 @@ function readForm() {
     title: value('#f-title'),
     prompt: value('#f-prompt'),
     model: value('#f-model'),
+    reasoning_effort: value('#f-reasoning'),
+    harness: value('#f-harness'),
     result: value('#f-result'),
     result_type: value('#f-type'),
     status: value('#f-status') || 'ok',
@@ -2107,6 +2170,8 @@ async function loadRecords({ append = false } = {}) {
   f.tags.forEach((t) => params.append('tag', t));
   f.types.forEach((t) => params.append('type', t));
   f.status.forEach((s) => params.append('status', s));
+  f.reasoning_efforts.forEach((value) => params.append('reasoning_effort', value));
+  f.harnesses.forEach((value) => params.append('harness', value));
   if (f.batch_id) params.set('batch_id', f.batch_id);
   const from = rangeFrom(f.range);
   if (from) params.set('from', String(from));
@@ -2136,6 +2201,8 @@ async function loadFacets() {
       tags: data.tags || [],
       types: data.types || [],
       statuses: data.statuses || [],
+      reasoning_efforts: data.reasoning_efforts || [],
+      harnesses: data.harnesses || [],
       batches: data.batches || [],
     };
   } catch (err) {
@@ -2209,6 +2276,10 @@ function bindEvents() {
       toggleFacet(state.filters.types, value);
     } else if (act === 'status') {
       toggleFacet(state.filters.status, value);
+    } else if (act === 'reasoning') {
+      toggleFacet(state.filters.reasoning_efforts, value);
+    } else if (act === 'harness') {
+      toggleFacet(state.filters.harnesses, value);
     } else if (act === 'model') {
       toggleFacet(state.filters.models, value);
     } else if (act === 'tag') {
@@ -2225,7 +2296,17 @@ function bindEvents() {
   });
 
   $('#clearFilters').addEventListener('click', () => {
-    state.filters = { q: '', models: [], tags: [], types: [], status: [], batch_id: '', range: 'all' };
+    state.filters = {
+      q: '',
+      models: [],
+      tags: [],
+      types: [],
+      status: [],
+      reasoning_efforts: [],
+      harnesses: [],
+      batch_id: '',
+      range: 'all',
+    };
     $('#searchInput').value = '';
     renderFacets();
     loadRecords();

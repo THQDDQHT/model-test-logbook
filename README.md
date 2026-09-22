@@ -9,6 +9,7 @@ HTML 结果在界面里用**沙箱 iframe 正常渲染**（真能跑 JS、能加
 - 零依赖：只用 Node 内置模块（`node:http` + `node:sqlite`），**不需要 `npm install`，不需要构建**。
 - 免鉴权：所有接口开放，CORS 允许任意来源，可直接被脚本 / 其他工具 / 浏览器页面调用。
 - 时间可追溯：每条记录都带记录时间（列表里同时显示绝对时间与相对时间，并按「今天 / 昨天」分组）。
+- 测试条件可筛选：登记时可记录 `reasoning_effort`（思考等级）和 `harness`（执行 Harness 名称）。
 - 随手对比：同一批次（同一提示词跑多个模型）的记录可一键并排对比。
 - 界面风格参考 `shenbi-maliang-gpt-image-workbench`：暖白底 + 细边框 + 黑色主按钮 + ChatGPT 式左侧栏，另附深色模式。
 
@@ -84,12 +85,12 @@ docker run -d --name model-test-logbook \
 发一个版本：
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
-产物会挂在 Release 页面（`model-test-logbook-v1.0.0.tar.gz` / `.zip` / `.sha256`），镜像会推到
-`ghcr.io/thqddqht/model-test-logbook:v1.0.0`、`:1.0`、`:latest`。
+产物会挂在 Release 页面（`model-test-logbook-v1.1.0.tar.gz` / `.zip` / `.sha256`），镜像会推到
+`ghcr.io/thqddqht/model-test-logbook:v1.1.0`、`:1.1`、`:latest`。
 也可以在 Actions 页面手动触发 `Release`，那样只产出 artifact、不建 Release（镜像打 `edge` 标签）。
 
 ---
@@ -126,10 +127,10 @@ git push origin v1.0.0
 
 | 区域 | 能力 |
 | --- | --- |
-| 左侧栏 | 新建记录、全部记录 / 测试批次 / 结果对比 / 统计概览 / 接口文档，按时间范围、结果类型、状态、模型、标签、批次筛选 |
+| 左侧栏 | 新建记录、全部记录 / 测试批次 / 结果对比 / 统计概览 / 接口文档，按时间范围、结果类型、状态、思考等级、Harness、模型、标签、批次筛选 |
 | 顶栏 | 关键词搜索（`/` 或 `⌘K` 聚焦）、排序（最新 / 最早在前）、每页条数、已加载计数 |
 | 记录卡片 | 标题、模型徽标、结果类型、状态、记录时间（绝对 + 相对）、标签、提示词折叠、结果渲染、附件缩略图、耗时 / tokens / 成本 / 批次 / 来源 / 记录 ID |
-| 新建 / 编辑记录 | 手动填写标题、提示词、模型、结果类型与内容、标签、批次、耗时、tokens、记录时间、备注。**结果本身就是文件时，把文件拖到表单任意位置，或直接点虚线框（整条区域铺着一个透明的原生 file input，点哪都能唤起选择器）、Ctrl⌘+V 粘贴截图，甚至直接把 HTML 片段拖进来**：HTML / MD / JSON / TXT 等文本类会读出内容当结果，图片 / PDF / 压缩包等会存成「文件型结果」。文本结果边写边给**实时预览**（HTML / Markdown 立刻渲染，不用等保存）。另有可选的「附加文件」区，用来给一条记录再挂几张图 |
+| 新建 / 编辑记录 | 手动填写标题、提示词、模型、思考等级、Harness、结果类型与内容、标签、批次、耗时、tokens、记录时间、备注。**结果本身就是文件时，把文件拖到表单任意位置，或直接点虚线框（整条区域铺着一个透明的原生 file input，点哪都能唤起选择器）、Ctrl⌘+V 粘贴截图，甚至直接把 HTML 片段拖进来**：HTML / MD / JSON / TXT 等文本类会读出内容当结果，图片 / PDF / 压缩包等会存成「文件型结果」。文本结果边写边给**实时预览**（HTML / Markdown 立刻渲染，不用等保存）。另有可选的「附加文件」区，用来给一条记录再挂几张图 |
 | 结果渲染 | HTML → 沙箱 iframe（自动高度、可展开全高、可切源码、可新窗口打开）；Markdown → 内置渲染器（含表格 / 代码块 / 引用）；JSON、代码、纯文本 → 等宽块；图片 → 缩略图网格；**文件 → 文件卡片（图片 / PDF / 视频 / 音频就地预览，其它给「新窗口打开 / 下载」）**；多段结果（`parts`）→ 分段渲染 |
 | 结果对比 | 勾选 2–4 条记录（或一键选择整个批次），并排查看不同模型的输出 |
 | 统计概览 | 总数 / 今天 / 近 7 天 / 近 30 天 / 模型数 / 失败率 / 平均耗时 / 占用空间，近 14 天柱状图，模型 / 类型 / 标签分布 |
@@ -155,6 +156,8 @@ curl -X POST http://127.0.0.1:8788/api/records \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "gpt-5.1",
+    "reasoning_effort": "high",
+    "harness": "codex",
     "prompt": "用三句话解释 RAG",
     "result": "第一句……",
     "tags": ["rag", "文本"],
@@ -176,6 +179,8 @@ curl -X POST http://127.0.0.1:8788/api/records \
   "created_at_local": "2026-09-17 11:48:12",
   "title": "用三句话解释 RAG",
   "model": "gpt-5.1",
+  "reasoning_effort": "high",
+  "harness": "codex",
   "result_type": "text",
   "url": "http://127.0.0.1:8788/r/rec_mf3k9x_7f3a1c"
 }
@@ -236,6 +241,8 @@ curl -X POST http://127.0.0.1:8788/api/records \
 | --- | --- |
 | `prompt` | 提示词。也支持 `messages` 数组（自动拼成可读文本，原文存在 `meta.messages`） |
 | `model` | 模型名，界面会聚合成筛选列表 |
+| `reasoning_effort` | 思考/推理等级，常用英文值如 `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`；不传则留空 |
+| `harness` | 使用的 Harness 名称，例如 `codex` / `claude-code` / `cursor` / `openai-api`；只记录名称，不传则留空 |
 | `result` | 结果正文，字符串。HTML 直接放进来即可（记得设 `result_type`） |
 | `result_type` | `text` / `html` / `markdown` / `json` / `code` / `image` / `file` / `mixed` / `error`；**不传会自动推断**（`/files/x.pdf` → `file`，`/files/x.png` → `image`） |
 | `parts` | 多段结果数组，元素形如 `{type,label,content}` |
@@ -261,6 +268,8 @@ curl -X POST http://127.0.0.1:8788/api/records \
 | --- | --- |
 | `prompt` | `prompt_text` `input` `user_prompt` `question` `query` `messages` |
 | `model` | `model_name` `model_id` `engine` |
+| `reasoning_effort` | 仅使用标准字段名，不提供别名 |
+| `harness` | 仅使用标准字段名，不提供别名 |
 | `result` | `output` `response` `content` `answer` `completion` `text` `html` |
 | `parts` | `results` `outputs` `items` `blocks` `segments` |
 | `result_type` | `format` `output_type` `content_type` `type` |
@@ -283,9 +292,9 @@ curl -X POST http://127.0.0.1:8788/api/records \
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/records` | 登记记录（对象 / 数组 / `{"records":[...]}`） |
-| GET | `/api/records` | 列表，参数：`q` `model` `tag` `batch_id`（严格批次 id）`batch`（批次 id 或批次名都行）`type` `status` `source` `from` `to` `limit`(默认 50，≤500) `offset` `order=asc\|desc` `id` |
+| GET | `/api/records` | 列表，参数：`q` `model` `tag` `batch_id`（严格批次 id）`batch`（批次 id 或批次名都行）`type` `status` `reasoning_effort` `harness` `source` `from` `to` `limit`(默认 50，≤500) `offset` `order=asc\|desc` `id` |
 | GET | `/api/records/:id` | 单条详情 |
-| PATCH | `/api/records/:id` | 更新 `title` `tags` `model` `provider` `status` `result_type` `prompt` `result` `error` `latency_ms` `cost` `created_at` `meta` `note` `batch` `attachments` |
+| PATCH | `/api/records/:id` | 更新 `title` `tags` `model` `provider` `reasoning_effort` `harness` `status` `result_type` `prompt` `result` `error` `latency_ms` `cost` `created_at` `meta` `note` `batch` `attachments` |
 | DELETE | `/api/records/:id` | 删除（连同附件文件） |
 | POST | `/api/records/bulk-delete` | 批量删除 `{"ids":["rec_..."]}` |
 | POST | `/api/records/:id/attachments` | 追加附件 |

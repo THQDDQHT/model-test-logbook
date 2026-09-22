@@ -1,6 +1,6 @@
 {
   "name": "model-test-logbook",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "本地优先的模型测试记录台：保存提示词与模型结果（文字 / HTML / Markdown / 图片），提供免鉴权的自动登记接口。零运行时依赖。",

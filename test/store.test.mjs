@@ -23,6 +23,8 @@ function makeRecord(overrides = {}) {
     prompt: '提示词',
     model: 'model-a',
     provider: '',
+    reasoning_effort: '',
+    harness: '',
     batch_id: null,
     batch_name: '',
     tags: [],
@@ -58,6 +60,55 @@ test('打开存储：默认使用 SQLite 后端并建好目录', async () => {
   store.close();
 });
 
+test('旧 SQLite 数据库会自动补齐 reasoning_effort 与 harness 列', async () => {
+  const dir = tmpDir();
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(path.join(dir, 'records.db'));
+  db.exec(`
+    CREATE TABLE records (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      prompt TEXT,
+      model TEXT,
+      provider TEXT,
+      batch_id TEXT,
+      batch_name TEXT,
+      tags TEXT,
+      status TEXT,
+      result_type TEXT,
+      result TEXT,
+      parts TEXT,
+      error TEXT,
+      latency_ms INTEGER,
+      tokens_in INTEGER,
+      tokens_out INTEGER,
+      total_tokens INTEGER,
+      cost REAL,
+      currency TEXT,
+      meta TEXT,
+      attachments TEXT,
+      source TEXT,
+      idempotency_key TEXT,
+      created_at TEXT,
+      created_at_ms INTEGER,
+      updated_at TEXT,
+      updated_at_ms INTEGER
+    );
+    INSERT INTO records (id, title, model, status, result_type, result, created_at, created_at_ms)
+    VALUES ('old', '旧记录', 'old-model', 'ok', 'text', 'ok', '1970-01-01T00:00:01.000Z', 1000);
+  `);
+  db.close();
+
+  const store = await openStore(dir);
+  assert.equal(store.backend, 'sqlite');
+  assert.equal(store.getRecord('old').reasoning_effort, '');
+  assert.equal(store.getRecord('old').harness, '');
+  store.insertRecord(makeRecord({ id: 'new', reasoning_effort: 'high', harness: 'codex' }));
+  assert.equal(store.getRecord('new').reasoning_effort, 'high');
+  assert.equal(store.getRecord('new').harness, 'codex');
+  store.close();
+});
+
 test('写入 / 读取 / 默认倒序 / 分页', async () => {
   const store = await openStore(tmpDir());
   store.insertRecord(makeRecord({ id: 'r1', created_at_ms: 1000 }));
@@ -89,6 +140,8 @@ test('筛选：关键词 / 模型 / 标签 / 批次 / 类型 / 状态 / 时间�
       tags: ['对比', '数学'],
       result_type: 'html',
       status: 'ok',
+      reasoning_effort: 'high',
+      harness: 'codex',
       result: '<div>数学题解</div><p>2</p>',
       created_at_ms: 1000,
     }),
@@ -100,17 +153,24 @@ test('筛选：关键词 / 模型 / 标签 / 批次 / 类型 / 状态 / 时间�
       tags: ['对比'],
       result_type: 'text',
       status: 'error',
+      reasoning_effort: 'low',
+      harness: 'claude-code',
       result: '超时了',
       created_at_ms: 5000,
     }),
   );
-  store.insertRecord(makeRecord({ id: 'c', model: 'gpt-5.1', tags: [], result_type: 'text', created_at_ms: 9000 }));
+  store.insertRecord(
+    makeRecord({ id: 'c', model: 'gpt-5.1', tags: [], result_type: 'text', reasoning_effort: 'high', harness: 'codex', created_at_ms: 9000 }),
+  );
 
   assert.deepEqual(store.listRecords({ model: 'gpt-5.1' }).items.map((r) => r.id).sort(), ['a', 'c']);
   assert.deepEqual(store.listRecords({ tags: ['对比'] }).items.map((r) => r.id).sort(), ['a', 'b']);
   assert.deepEqual(store.listRecords({ tags: ['对比', '数学'] }).items.map((r) => r.id), ['a']);
   assert.deepEqual(store.listRecords({ result_type: 'html' }).items.map((r) => r.id), ['a']);
   assert.deepEqual(store.listRecords({ status: 'error' }).items.map((r) => r.id), ['b']);
+  assert.deepEqual(store.listRecords({ reasoning_effort: ['high'] }).items.map((r) => r.id).sort(), ['a', 'c']);
+  assert.deepEqual(store.listRecords({ harness: ['codex'] }).items.map((r) => r.id).sort(), ['a', 'c']);
+  assert.deepEqual(store.listRecords({ reasoning_effort: ['high'], harness: ['claude-code'] }).total, 0);
   assert.deepEqual(store.listRecords({ q: 'claude' }).items.map((r) => r.id), ['b'], '关键词应能命中模型名');
   assert.deepEqual(store.listRecords({ q: '数学题解' }).items.map((r) => r.id), ['a'], '关键词应能命中结果正文');
   assert.deepEqual(store.listRecords({ from_ms: 4000, to_ms: 8000 }).items.map((r) => r.id), ['b']);
@@ -287,8 +347,12 @@ test('批次：创建 / 按名查找 / 计数 / 重命名同步到记录 / 删�
 test('统计：总数 / 今天 / 14 天序列 / 模型与标签分布', async () => {
   const store = await openStore(tmpDir());
   const now = Date.now();
-  store.insertRecord(makeRecord({ id: 'r1', model: 'gpt', tags: ['x', 'y'], latency_ms: 100, created_at_ms: now - 1000 }));
-  store.insertRecord(makeRecord({ id: 'r2', model: 'gpt', tags: ['x'], latency_ms: 300, created_at_ms: now - 2000 }));
+  store.insertRecord(
+    makeRecord({ id: 'r1', model: 'gpt', tags: ['x', 'y'], latency_ms: 100, reasoning_effort: 'high', harness: 'codex', created_at_ms: now - 1000 }),
+  );
+  store.insertRecord(
+    makeRecord({ id: 'r2', model: 'gpt', tags: ['x'], latency_ms: 300, reasoning_effort: 'high', harness: 'codex', created_at_ms: now - 2000 }),
+  );
   store.insertRecord(makeRecord({ id: 'r3', model: 'claude', status: 'error', created_at_ms: now - 40 * 86400000 }));
 
   const stats = store.stats();
@@ -304,6 +368,8 @@ test('统计：总数 / 今天 / 14 天序列 / 模型与标签分布', async ()
   assert.equal(stats.models.find((m) => m.model === 'claude').errors, 1);
   assert.equal(stats.tags.find((t) => t.tag === 'x').count, 2);
   assert.equal(stats.statuses.find((s) => s.status === 'error').count, 1);
+  assert.equal(stats.reasoning_efforts.find((item) => item.reasoning_effort === 'high').count, 2);
+  assert.equal(stats.harnesses.find((item) => item.harness === 'codex').count, 2);
   assert.ok(stats.db_bytes > 0);
   store.close();
 });

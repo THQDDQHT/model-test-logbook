@@ -47,6 +47,21 @@ test('常见字段别名都能正确识别', () => {
   assert.equal(record.created_at_ms, 1758089292000, '10 位时间戳按秒处理');
 });
 
+test('reasoning_effort 与 harness 使用标准字段并清理首尾空格', () => {
+  const { record } = norm({
+    model: 'gpt-5.1',
+    reasoning_effort: ' high ',
+    harness: ' codex ',
+    result: 'ok',
+    reasoning: 'high',
+    harness_tool: 'cursor',
+  });
+  assert.equal(record.reasoning_effort, 'high');
+  assert.equal(record.harness, 'codex');
+  assert.equal(record.meta._extra.reasoning, 'high', '不兼容非标准字段名');
+  assert.equal(record.meta._extra.harness_tool, 'cursor', '不兼容非标准字段名');
+});
+
 test('未识别的字段原样收进 meta._extra，不丢数据', () => {
   const { record } = norm({
     model: 'm',

@@ -116,6 +116,8 @@ test('登记最小记录：返回 id / 时间 / 结果页地址', async () => {
   const before = Date.now();
   const data = await createRecord({
     model: 'gpt-5.1',
+    reasoning_effort: 'high',
+    harness: 'codex',
     prompt: '用三句话解释 RAG',
     result: '第一句……',
     tags: ['rag', '文本'],
@@ -126,6 +128,8 @@ test('登记最小记录：返回 id / 时间 / 结果页地址', async () => {
   });
   assert.match(data.id, /^rec_/);
   assert.equal(data.model, 'gpt-5.1');
+  assert.equal(data.reasoning_effort, 'high');
+  assert.equal(data.harness, 'codex');
   assert.equal(data.result_type, 'text');
   assert.equal(data.title, '用三句话解释 RAG');
   assert.equal(data.url, `${base}/r/${data.id}`);
@@ -137,6 +141,8 @@ test('登记最小记录：返回 id / 时间 / 结果页地址', async () => {
   assert.equal(one.record.tokens_in, 62);
   assert.equal(one.record.tokens_out, 208);
   assert.equal(one.record.total_tokens, 270, '只给 in/out 时服务端要自动求和');
+  assert.equal(one.record.reasoning_effort, 'high');
+  assert.equal(one.record.harness, 'codex');
   assert.deepEqual(one.record.tags, ['rag', '文本']);
   assert.equal(one.record.latency_ms, 1840);
 });
@@ -238,24 +244,37 @@ test('列表筛选 / 排序 / 分页 / 总数头', async () => {
   const byQ = await (await fetch(`${base}/api/records?q=${encodeURIComponent('测试渲染')}`)).json();
   assert.ok(byQ.total >= 1);
 
+  const byReasoning = await (await fetch(`${base}/api/records?reasoning_effort=high&harness=codex`)).json();
+  assert.ok(byReasoning.total >= 1);
+  assert.ok(byReasoning.items.every((r) => r.reasoning_effort === 'high' && r.harness === 'codex'));
+
   // 回归：不传 limit 时必须用默认 50，而不是被 Number(null)=0 夹成 1
   const defaultPage = await (await fetch(`${base}/api/records`)).json();
   assert.equal(defaultPage.limit, 50);
   assert.ok(defaultPage.items.length > 1, `默认分页不应只返回 1 条，实际 ${defaultPage.items.length}`);
 });
 
-test('PATCH 更新标题 / 标签 / 批次 / 备注', async () => {
+test('PATCH 更新标题 / 标签 / 批次 / 思考等级 / Harness / 备注', async () => {
   const created = await createRecord({ model: 'm', prompt: 'p', result: 'r' });
   const res = await fetch(`${base}/api/records/${created.id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: '改过的标题', tags: 'a,b', batch: 'API 批次', note: '手工备注' }),
+    body: JSON.stringify({
+      title: '改过的标题',
+      tags: 'a,b',
+      batch: 'API 批次',
+      reasoning_effort: ' medium ',
+      harness: ' claude-code ',
+      note: '手工备注',
+    }),
   });
   const data = await parse(res);
   assert.equal(res.status, 200);
   assert.equal(data.record.title, '改过的标题');
   assert.deepEqual(data.record.tags, ['a', 'b']);
   assert.equal(data.record.batch_name, 'API 批次');
+  assert.equal(data.record.reasoning_effort, 'medium');
+  assert.equal(data.record.harness, 'claude-code');
   assert.ok(data.record.batch_id, '批次名不存在时应自动建批次');
   assert.equal(data.record.meta.note, '手工备注');
 
@@ -264,6 +283,8 @@ test('PATCH 更新标题 / 标签 / 批次 / 备注', async () => {
 
   const facets = await (await fetch(`${base}/api/facets`)).json();
   assert.ok(facets.batches.some((b) => b.name === 'API 批次' && b.count === 1));
+  assert.ok(facets.reasoning_efforts.some((item) => item.reasoning_effort === 'medium'));
+  assert.ok(facets.harnesses.some((item) => item.harness === 'claude-code'));
 });
 
 test('附件清理：被结果引用的不删，没人引用的才删', async () => {
@@ -409,7 +430,7 @@ test('统计与导出', async () => {
 
   const csv = await fetch(`${base}/api/export?format=csv`);
   const csvText = await csv.text();
-  assert.match(csvText, /id,created_at,created_at_local/);
+  assert.match(csvText, /id,created_at,created_at_local,[^\n]*reasoning_effort,harness/);
   assert.match(csvText, /用三句话解释 RAG/);
 
   const ndjson = await fetch(`${base}/api/export?format=ndjson`);

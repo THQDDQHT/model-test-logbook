@@ -21,6 +21,8 @@ const DYNAMIC_IDS = new Set([
   'f-title',
   'f-prompt',
   'f-model',
+  'f-reasoning',
+  'f-harness',
   'f-type',
   'f-status',
   'f-result',

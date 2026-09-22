@@ -44,7 +44,7 @@ const MAX_BODY = clampInt(flagValue('max-body-mb', process.env.MAX_BODY_MB || 32
 const SEED = !hasFlag('no-seed') && process.env.SEED !== '0';
 const QUIET = hasFlag('quiet');
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const STARTED_AT = nowMs();
 
 /* ------------------------------------------------------------------ *
@@ -334,6 +334,8 @@ function parseListQuery(sp) {
   const order = sp.get('order') === 'asc' ? 'asc' : 'desc';
   const models = [...sp.getAll('model'), ...sp.getAll('models')].flatMap(splitCsv);
   const tags = [...sp.getAll('tag'), ...sp.getAll('tags')].flatMap(splitCsv);
+  const reasoningEfforts = sp.getAll('reasoning_effort').flatMap(splitCsv);
+  const harnesses = sp.getAll('harness').flatMap(splitCsv);
   return {
     q: asString(sp.get('q') || sp.get('search') || '').trim(),
     model: models,
@@ -342,6 +344,8 @@ function parseListQuery(sp) {
     batch: asString(sp.get('batch') || '').trim(),
     result_type: asString(sp.get('type') || sp.get('result_type') || '').trim(),
     status: asString(sp.get('status') || '').trim(),
+    reasoning_effort: reasoningEfforts,
+    harness: harnesses,
     source: asString(sp.get('source') || '').trim(),
     from_ms: parseRangeBoundary(sp.get('from') || sp.get('since') || sp.get('start'), 'from'),
     to_ms: parseRangeBoundary(sp.get('to') || sp.get('until') || sp.get('end'), 'to'),
@@ -407,13 +411,13 @@ route('GET', '/api/help', async (ctx) => {
     base_url: ctx.baseUrl,
     auth: 'none',
     quick_start: [
-      `curl -X POST ${ctx.baseUrl}/api/records -H 'Content-Type: application/json' -d '{"model":"gpt-5.1","prompt":"你好","result":"你好！","latency_ms":820}'`,
+      `curl -X POST ${ctx.baseUrl}/api/records -H 'Content-Type: application/json' -d '{"model":"gpt-5.1","reasoning_effort":"high","harness":"codex","prompt":"你好","result":"你好！","latency_ms":820}'`,
       `curl -X POST ${ctx.baseUrl}/api/records -H 'Content-Type: application/json' -d '{"model":"gpt-5.1","prompt":"做个卡片","html":"<div>hi</div>","result_type":"html"}'`,
       `curl -X POST "${ctx.baseUrl}/api/records?model=gpt-5.1&prompt=解释RAG" -H 'Content-Type: text/plain' --data-binary @result.html`,
     ],
     endpoints: [
       { method: 'POST', path: '/api/records', desc: '登记一条记录（也支持数组批量，最多 200 条）' },
-      { method: 'GET', path: '/api/records', desc: '列表：q/model/tag/batch/type/status/from/to/limit/offset/order' },
+      { method: 'GET', path: '/api/records', desc: '列表：q/model/tag/batch/type/status/reasoning_effort/harness/from/to/limit/offset/order' },
       { method: 'GET', path: '/api/records/:id', desc: '单条详情' },
       { method: 'PATCH', path: '/api/records/:id', desc: '更新标题/标签/批次/meta 等' },
       { method: 'DELETE', path: '/api/records/:id', desc: '删除一条' },
@@ -430,6 +434,7 @@ route('GET', '/api/help', async (ctx) => {
     field_aliases: FIELD_ALIASES_DOC,
     notes: [
       '未识别的字段不会丢失，会原样保存在 meta._extra 里',
+      'reasoning_effort 和 harness 只使用标准字段名，不提供别名兼容',
       'result_type 不传会自动推断（html / json / markdown / text / image）',
       'created_at 支持 ISO 字符串、秒级/毫秒级时间戳；不传则用服务器当前时间',
       '带 idempotency_key（或 request_id / trace_id）重复提交时不会新增，只返回已有记录',
@@ -441,6 +446,8 @@ route('GET', '/api/help', async (ctx) => {
 const FIELD_ALIASES_DOC = {
   prompt: ['prompt', 'prompt_text', 'input', 'user_prompt', 'question', 'query', 'messages'],
   model: ['model', 'model_name', 'model_id', 'engine'],
+  reasoning_effort: ['reasoning_effort'],
+  harness: ['harness'],
   result: ['result', 'output', 'response', 'content', 'answer', 'completion', 'text', 'html'],
   parts: ['parts', 'results', 'outputs', 'items', 'blocks'],
   result_type: ['result_type', 'resultType', 'format', 'output_type', 'content_type', 'type'],
@@ -503,6 +510,8 @@ route('POST', '/api/records', async (ctx) => {
       created_at_local: result.record.created_at_local,
       title: result.record.title,
       model: result.record.model,
+      reasoning_effort: result.record.reasoning_effort,
+      harness: result.record.harness,
       result_type: result.record.result_type,
       url: `${ctx.baseUrl}/r/${result.record.id}`,
       warnings,
@@ -571,6 +580,8 @@ route('PATCH', '/api/records/:id', async (ctx) => {
   if (body.tags !== undefined) patch.tags = Array.isArray(body.tags) ? body.tags.map(asString) : splitCsv(body.tags);
   if (body.model !== undefined || body.model_name !== undefined) patch.model = asString(body.model ?? body.model_name);
   if (body.provider !== undefined) patch.provider = asString(body.provider);
+  if (body.reasoning_effort !== undefined) patch.reasoning_effort = asString(body.reasoning_effort).trim();
+  if (body.harness !== undefined) patch.harness = asString(body.harness).trim();
   if (body.status !== undefined) patch.status = asString(body.status);
   if (body.result_type !== undefined || body.type !== undefined) patch.result_type = asString(body.result_type ?? body.type);
   if (body.prompt !== undefined) patch.prompt = asString(body.prompt);
@@ -668,6 +679,8 @@ route('GET', '/api/facets', async (ctx) => {
     tags: stats.tags,
     types: stats.types,
     statuses: stats.statuses,
+    reasoning_efforts: stats.reasoning_efforts,
+    harnesses: stats.harnesses,
     batches: ctx.store.listBatches(),
     total: stats.total,
   });
@@ -760,6 +773,8 @@ route('GET', '/api/export', async (ctx) => {
       'title',
       'model',
       'provider',
+      'reasoning_effort',
+      'harness',
       'batch_name',
       'tags',
       'status',
@@ -782,6 +797,8 @@ route('GET', '/api/export', async (ctx) => {
           r.title,
           r.model,
           r.provider,
+          r.reasoning_effort,
+          r.harness,
           r.batch_name,
           (r.tags || []).join('|'),
           r.status,
@@ -883,6 +900,8 @@ route('GET', '/r/:id', async (ctx) => {
 
   const meta = [
     `<strong>${escapeHtmlText(record.model || '未填模型')}</strong>`,
+    record.reasoning_effort ? `思考 ${escapeHtmlText(record.reasoning_effort)}` : '',
+    record.harness ? `Harness ${escapeHtmlText(record.harness)}` : '',
     escapeHtmlText(record.title || '(无标题)'),
     `记录时间 ${record.created_at_local || ''}`,
     record.latency_ms ? `耗时 ${record.latency_ms} ms` : '',
