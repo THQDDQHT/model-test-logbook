@@ -181,7 +181,7 @@ test('HTML 结果：列表里可查，/r/:id 直接以网页输出', async () =>
   const svgDoc = '<!doctype html><html><head><style>body{overflow:hidden}</style></head><body><main><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg></main></body></html>';
   const svgRecord = await createRecord({ model: 'svg', prompt: 'svg', result_type: 'html', result: svgDoc });
   const svgPage = await (await fetch(`${base}/r/${svgRecord.id}`)).text();
-  assert.match(svgPage, /data-mtl-fit/, '全屏 SVG 结果应注入查看器适配样式');
+  assert.equal(svgPage, svgDoc, 'HTML 结果不能注入样式或改变原始缩放');
   assert.equal((svgPage.match(/<!doctype html>/gi) || []).length, 1, '不应再嵌套一层 HTML 文档');
 
   const missing = await fetch(`${base}/r/rec_不存在`);
