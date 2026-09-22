@@ -85,12 +85,12 @@ docker run -d --name model-test-logbook \
 发一个版本：
 
 ```bash
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
-产物会挂在 Release 页面（`model-test-logbook-v1.1.0.tar.gz` / `.zip` / `.sha256`），镜像会推到
-`ghcr.io/thqddqht/model-test-logbook:v1.1.0`、`:1.1`、`:latest`。
+产物会挂在 Release 页面（`model-test-logbook-v1.2.0.tar.gz` / `.zip` / `.sha256`），镜像会推到
+`ghcr.io/thqddqht/model-test-logbook:v1.2.0`、`:1.2`、`:latest`。
 也可以在 Actions 页面手动触发 `Release`，那样只产出 artifact、不建 Release（镜像打 `edge` 标签）。
 
 ---
