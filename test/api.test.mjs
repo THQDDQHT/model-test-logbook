@@ -170,13 +170,19 @@ test('HTML 结果：列表里可查，/r/:id 直接以网页输出', async () =>
   const page = await fetch(`${base}/r/${data.id}`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type'), /text\/html/);
-  assert.match(await page.text(), /测试渲染/);
+  assert.equal(await page.text(), html, '完整 HTML 文档应直接输出，不能嵌套进记录台外壳');
 
   const raw = await fetch(`${base}/r/${data.id}?raw=1`);
   assert.equal(await raw.text(), html, 'raw=1 应原样输出结果本身');
 
   const download = await fetch(`${base}/r/${data.id}?download=1`);
   assert.match(download.headers.get('content-disposition') || '', /attachment/);
+
+  const svgDoc = '<!doctype html><html><head><style>body{overflow:hidden}</style></head><body><main><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg></main></body></html>';
+  const svgRecord = await createRecord({ model: 'svg', prompt: 'svg', result_type: 'html', result: svgDoc });
+  const svgPage = await (await fetch(`${base}/r/${svgRecord.id}`)).text();
+  assert.match(svgPage, /data-mtl-fit/, '全屏 SVG 结果应注入查看器适配样式');
+  assert.equal((svgPage.match(/<!doctype html>/gi) || []).length, 1, '不应再嵌套一层 HTML 文档');
 
   const missing = await fetch(`${base}/r/rec_不存在`);
   assert.equal(missing.status, 404);

@@ -388,7 +388,12 @@ function frameSrcdoc(html, key) {
     'try{if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}}catch(e){}})();</scr' +
     'ipt>';
 
-  const source = String(html ?? '');
+  let source = String(html ?? '');
+  if (/<svg[\s>]/i.test(source) && /overflow\s*:\s*hidden/i.test(source)) {
+    const fitStyle =
+      '<style data-mtl-fit>html,body{width:100%;height:100%;}body>main{width:100%;height:100%;}body>main>svg,body>svg{width:100%;height:100%;max-width:100%;max-height:100%;}</style>';
+    source = /<\/head\s*>/i.test(source) ? source.replace(/<\/head\s*>/i, `${fitStyle}</head>`) : `${fitStyle}${source}`;
+  }
   if (/<\/body\s*>/i.test(source)) return source.replace(/<\/body\s*>/i, `${probe}</body>`);
   if (/<html[\s>]/i.test(source)) return source + probe;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:0;font:14px/1.6 Inter,system-ui,-apple-system,"PingFang SC",sans-serif}img{max-width:100%}</style></head><body>${source}${probe}</body></html>`;

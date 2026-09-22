@@ -893,8 +893,15 @@ route('GET', '/r/:id', async (ctx) => {
     return;
   }
 
-  if (type === 'html' && wantRaw) {
-    sendText(ctx.res, content, 200, 'text/html; charset=utf-8');
+  const isFullHtmlDocument = /<!doctype\s+html|<html[\s>]/i.test(asString(content));
+  if (type === 'html' && (wantRaw || isFullHtmlDocument)) {
+    let output = content;
+    if (/<svg[\s>]/i.test(output) && /overflow\s*:\s*hidden/i.test(output)) {
+      const fitStyle =
+        '<style data-mtl-fit>html,body{width:100%;height:100%;}body>main{width:100%;height:100%;}body>main>svg,body>svg{width:100%;height:100%;max-width:100%;max-height:100%;}</style>';
+      output = /<\/head\s*>/i.test(output) ? output.replace(/<\/head\s*>/i, `${fitStyle}</head>`) : `${fitStyle}${output}`;
+    }
+    sendText(ctx.res, output, 200, 'text/html; charset=utf-8');
     return;
   }
 
