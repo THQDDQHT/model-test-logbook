@@ -199,8 +199,8 @@ test('上传文件当结果 → 保存 → 卡片里用沙箱 iframe 渲染', { 
   assert.ok(frame.getAttribute('srcdoc').includes('上传的标题'), 'iframe 里应当有上传的 HTML 内容');
   assert.match(frame.getAttribute('sandbox') || '', /allow-scripts/);
   assert.ok(!card.querySelector('pre.text-block'), '不应该退化成 <pre> 文本块');
-  assert.match(card.textContent, /思考 high/);
-  assert.match(card.textContent, /Harness codex/);
+  assert.match(card.textContent, /思考\s*high/);
+  assert.match(card.textContent, /Harness\s*codex/);
 
   const saved = await (await fetch(`${base}/api/records?q=${encodeURIComponent('上传的 html')}`)).json();
   assert.equal(saved.total, 1);

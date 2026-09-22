@@ -86,27 +86,27 @@
               <div class="chip-row" id="statusFilter"></div>
             </section>
 
-            <section class="filter-block">
+            <section class="filter-block" id="reasoningFilterSection">
               <h4>思考等级</h4>
               <div class="chip-row" id="reasoningFilter"></div>
             </section>
 
-            <section class="filter-block">
+            <section class="filter-block" id="harnessFilterSection">
               <h4>Harness</h4>
               <div class="chip-row" id="harnessFilter"></div>
             </section>
 
-            <section class="filter-block">
+            <section class="filter-block" id="modelFilterSection">
               <h4>模型 <em id="modelFilterHint"></em></h4>
               <div class="facet-list" id="modelFilter"></div>
             </section>
 
-            <section class="filter-block">
+            <section class="filter-block" id="tagFilterSection">
               <h4>标签 <em id="tagFilterHint"></em></h4>
               <div class="facet-list tags" id="tagFilter"></div>
             </section>
 
-            <section class="filter-block">
+            <section class="filter-block" id="batchFilterSection">
               <h4>批次</h4>
               <div class="facet-list" id="batchFilter"></div>
             </section>
@@ -143,6 +143,10 @@
             <kbd>/</kbd>
           </div>
           <div class="topbar-right">
+            <div class="density-toggle" id="densityToggle" role="group" aria-label="显示密度">
+              <button type="button" data-density="comfortable" title="舒适模式">舒适</button>
+              <button type="button" data-density="compact" title="紧凑模式">紧凑</button>
+            </div>
             <label class="select-wrap">
               <span class="visually-hidden">排序</span>
               <select id="sortSelect">

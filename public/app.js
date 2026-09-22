@@ -51,6 +51,7 @@ const state = {
   offset: 0,
   limit: 50,
   order: 'desc',
+  density: 'comfortable',
   loading: false,
   filters: {
     q: '',
@@ -465,10 +466,10 @@ function findAttachment(record, url) {
 }
 
 function imageGridHtml(urls) {
-  return `<div class="image-grid">${urls
+  return `<div class="image-grid ${urls.length === 1 ? 'single' : ''}">${urls
     .map(
       (url) =>
-        `<a class="image-item" href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="结果图片" loading="lazy"></a>`,
+        `<a class="image-item" href="${esc(url)}" data-act="lightbox" data-url="${esc(url)}" data-name="结果图片" target="_blank" rel="noopener"><img src="${esc(url)}" alt="结果图片" loading="lazy"></a>`,
     )
     .join('')}</div>`;
 }
@@ -485,7 +486,7 @@ function fileCardHtml(url, meta) {
 
   let preview = '';
   if (isImage) {
-    preview = `<div class="file-preview"><a href="${esc(value)}" target="_blank" rel="noopener"><img src="${esc(value)}" alt="${esc(name)}" loading="lazy"></a></div>`;
+    preview = `<div class="file-preview"><a href="${esc(value)}" data-act="lightbox" data-url="${esc(value)}" data-name="${esc(name)}" target="_blank" rel="noopener"><img src="${esc(value)}" alt="${esc(name)}" loading="lazy"></a></div>`;
   } else if (/\.pdf($|\?)/.test(lower)) {
     preview = `<iframe class="file-frame" src="${esc(value)}" title="${esc(name)}" loading="lazy"></iframe>`;
   } else if (/\.(mp4|webm|mov)($|\?)/.test(lower)) {
@@ -546,12 +547,45 @@ function renderResultBody(record, opts = {}) {
 }
 
 /** 插入 DOM 后再把 srcdoc 写进 iframe，避免属性转义问题 */
+let frameObserver = null;
+
+function loadFrame(frame) {
+  const key = frame.getAttribute('data-frame');
+  if (!key || !frames.has(key)) return;
+  const wrap = frame.closest('.frame-wrap');
+  wrap?.classList.add('is-loading');
+  frame.addEventListener(
+    'load',
+    () => {
+      wrap?.classList.remove('is-loading');
+    },
+    { once: true },
+  );
+  frame.setAttribute('srcdoc', frames.get(key));
+  frame.removeAttribute('data-lazy');
+  if (frameObserver) frameObserver.unobserve(frame);
+}
+
 function hydrateFrames(root = document) {
-  $$('iframe[data-frame]', root).forEach((frame) => {
-    const key = frame.getAttribute('data-frame');
-    if (frames.has(key) && frame.getAttribute('srcdoc') === null) {
-      frame.setAttribute('srcdoc', frames.get(key));
-    }
+  const candidates = $$('iframe[data-frame]', root).filter((frame) => frame.getAttribute('srcdoc') === null);
+  if (!candidates.length) return;
+  if (!('IntersectionObserver' in window)) {
+    candidates.forEach(loadFrame);
+    return;
+  }
+  if (!frameObserver) {
+    frameObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) loadFrame(entry.target);
+        });
+      },
+      { rootMargin: '480px 0px' },
+    );
+  }
+  candidates.forEach((frame) => {
+    frame.dataset.lazy = '1';
+    frameObserver.observe(frame);
   });
 }
 
@@ -612,11 +646,18 @@ function renderRecordCard(record, { detail = false } = {}) {
   if (record.total_tokens) metaBits.push(`tokens <b>${fmtNum(record.total_tokens)}</b>`);
   if (record.cost !== null && record.cost !== undefined && record.cost !== '') metaBits.push(`成本 <b>${record.cost} ${esc(record.currency || '')}</b>`);
   if (record.provider) metaBits.push(`渠道 <b>${esc(record.provider)}</b>`);
-  if (record.batch_name) metaBits.push(`批次 <b>${esc(record.batch_name)}</b>`);
   if (record.source && record.source !== 'api') metaBits.push(`来源 <b>${esc(record.source)}</b>`);
   if (record.attachments && record.attachments.length) metaBits.push(`附件 <b>${record.attachments.length}</b>`);
-  metaBits.push(`ID <b>${esc(record.id)}</b>`);
   const note = record.meta && record.meta.note ? String(record.meta.note) : '';
+
+  const facts = [];
+  if (record.model) facts.push(`<span class="record-fact model"><span>模型</span><strong>${esc(record.model)}</strong></span>`);
+  if (record.reasoning_effort) {
+    facts.push(`<span class="record-fact"><span>思考</span><strong>${esc(record.reasoning_effort)}</strong></span>`);
+  }
+  if (record.harness) facts.push(`<span class="record-fact"><span>Harness</span><strong>${esc(record.harness)}</strong></span>`);
+  facts.push(`<span class="record-fact"><span>结果</span><strong>${esc(typeLabel(record.result_type))}</strong></span>`);
+  if (record.batch_name) facts.push(`<span class="record-fact"><span>批次</span><strong>${esc(record.batch_name)}</strong></span>`);
 
   const modeTabs =
     record.result_type === 'html' && !(record.parts && record.parts.length > 1)
@@ -636,23 +677,17 @@ function renderRecordCard(record, { detail = false } = {}) {
           <span title="记录时间 ${esc(fmtAbs(record.created_at_ms))}">${esc(fmtAbs(record.created_at_ms))}</span>
           <span class="dot"></span>
           <span>${esc(fmtRel(record.created_at_ms))}</span>
-          ${record.model ? `<span class="dot"></span><span>${esc(record.model)}</span>` : ''}
         </div>
       </div>
-      <div class="record-head-right">
-        ${record.model ? `<span class="badge model">${esc(record.model)}</span>` : ''}
-        ${record.reasoning_effort ? `<span class="badge">思考 ${esc(record.reasoning_effort)}</span>` : ''}
-        ${record.harness ? `<span class="badge">Harness ${esc(record.harness)}</span>` : ''}
-        <span class="badge type">${esc(typeLabel(record.result_type))}</span>
-        ${statusBadge(record)}
-      </div>
+      <div class="record-head-right">${statusBadge(record)}</div>
     </header>
 
-    ${record.tags && record.tags.length ? `<div class="badge-row">${tagBadges(record)}</div>` : ''}
+    <div class="record-facts">${facts.join('')}</div>
+    ${record.tags && record.tags.length ? `<div class="record-tag-row">${tagBadges(record)}</div>` : ''}
 
     ${
       prompt
-        ? `<section class="block">
+        ? `<section class="block prompt-block">
             <div class="block-head">
               <span class="label">提示词</span>
               <span class="spacer"></span>
@@ -663,7 +698,7 @@ function renderRecordCard(record, { detail = false } = {}) {
         : ''
     }
 
-    <section class="block">
+    <section class="block result-block">
       <div class="block-head">
         <span class="label">结果 · ${esc(typeLabel(record.result_type))}</span>
         <span class="spacer"></span>
@@ -671,8 +706,6 @@ function renderRecordCard(record, { detail = false } = {}) {
           ${modeTabs}
           ${record.result_type === 'html' ? `<button class="ghost-button" data-act="frame-full">${ui.full ? '还原高度' : '展开全高'}</button>` : ''}
           ${record.result_type === 'html' ? `<button class="ghost-button" data-act="open">新窗口</button>` : ''}
-          <button class="ghost-button" data-act="copy">复制</button>
-          <button class="ghost-button" data-act="download">下载</button>
         </div>
       </div>
       <div class="result-body">${renderResultBody(record, { full: ui.full })}</div>
@@ -683,18 +716,54 @@ function renderRecordCard(record, { detail = false } = {}) {
     ${record.error && record.result ? `<div class="error-block" style="margin-top:10px">${esc(record.error)}</div>` : ''}
     ${note ? `<div class="muted-block">备注：${esc(note)}</div>` : ''}
 
-    <footer class="record-meta">
-      <span>${metaBits.join('</span><span>')}</span>
-    </footer>
+    ${metaBits.length ? `<footer class="record-meta"><span>${metaBits.join('</span><span>')}</span></footer>` : ''}
 
-    <footer class="record-meta" style="border-top:0;padding-top:8px">
-      <button class="ghost-button" data-act="detail">详情</button>
-      <button class="ghost-button" data-act="edit">编辑</button>
-      <button class="ghost-button" data-act="copy-json">复制 JSON</button>
-      <button class="ghost-button" data-act="delete">删除</button>
-      <a class="ghost-button" href="/r/${encodeURIComponent(record.id)}" target="_blank" rel="noopener">打开结果页</a>
+    <footer class="record-actions">
+      <div class="record-actions-main">
+        <button class="button compact" data-act="detail">查看详情</button>
+        <button class="ghost-button" data-act="copy">复制结果</button>
+        <button class="ghost-button" data-act="download">下载</button>
+      </div>
+      <details class="more-menu">
+        <summary class="ghost-button">更多</summary>
+        <div class="more-menu-panel">
+          <span class="more-menu-id">ID · ${esc(record.id)}</span>
+          <button class="menu-item" data-act="edit">编辑记录</button>
+          <button class="menu-item" data-act="copy-json">复制 JSON</button>
+          <a class="menu-item" href="/r/${encodeURIComponent(record.id)}" target="_blank" rel="noopener">打开结果页</a>
+          <span class="menu-separator"></span>
+          <button class="menu-item danger" data-act="delete">删除记录</button>
+        </div>
+      </details>
     </footer>
   </article>`;
+}
+
+function activeFilterChip(kind, value, label) {
+  return `<button class="active-filter-chip" type="button" data-act="remove-filter" data-kind="${esc(kind)}" data-value="${esc(value)}">
+    <span>${esc(label)}</span><span class="active-filter-remove" aria-hidden="true">×</span>
+  </button>`;
+}
+
+function activeFiltersHtml() {
+  const f = state.filters;
+  const chips = [];
+  f.models.forEach((value) => chips.push(activeFilterChip('model', value, `模型 · ${value}`)));
+  f.tags.forEach((value) => chips.push(activeFilterChip('tag', value, `#${value}`)));
+  f.types.forEach((value) => chips.push(activeFilterChip('type', value, `类型 · ${typeLabel(value)}`)));
+  f.status.forEach((value) => chips.push(activeFilterChip('status', value, `状态 · ${statusLabel(value)}`)));
+  f.reasoning_efforts.forEach((value) => chips.push(activeFilterChip('reasoning', value, `思考 · ${value}`)));
+  f.harnesses.forEach((value) => chips.push(activeFilterChip('harness', value, `Harness · ${value}`)));
+  if (f.batch_id) {
+    const batch = state.facets.batches.find((item) => item.id === f.batch_id);
+    chips.push(activeFilterChip('batch', f.batch_id, `批次 · ${batch ? batch.name : f.batch_id}`));
+  }
+  if (f.range !== 'all') {
+    const range = RANGES.find((item) => item.id === f.range);
+    chips.push(activeFilterChip('range', f.range, range ? range.label : f.range));
+  }
+  if (!chips.length) return '';
+  return `<div class="active-filters">${chips.join('')}<button class="link-button" type="button" data-act="clear-filters">清空筛选</button></div>`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -735,7 +804,24 @@ function renderList() {
     groups.get(key).push(record);
   }
 
-  let html = '<div class="record-groups">';
+  const activeFilterCount =
+    state.filters.models.length +
+    state.filters.tags.length +
+    state.filters.types.length +
+    state.filters.status.length +
+    state.filters.reasoning_efforts.length +
+    state.filters.harnesses.length +
+    (state.filters.batch_id ? 1 : 0) +
+    (state.filters.range !== 'all' ? 1 : 0);
+  const activeFilters = activeFiltersHtml();
+
+  let html = `<div class="list-head">
+    <div>
+      <h1>全部记录</h1>
+      <p>${fmtNum(state.total)} 条记录${activeFilterCount ? ` · 已启用 ${activeFilterCount} 个筛选` : ''}</p>
+    </div>
+    ${activeFilters}
+  </div><div class="record-groups">`;
   for (const [key, items] of groups) {
     html += `<section class="day-group">
       <div class="day-label"><span>${esc(dayLabel(key))}</span><span>${items.length} 条</span></div>
@@ -960,6 +1046,32 @@ function renderStats() {
         .join('')
     : '<div class="facet-empty">暂无数据</div>';
 
+  const maxReasoning = Math.max(1, ...(stats.reasoning_efforts || []).map((item) => item.count));
+  const reasoning = stats.reasoning_efforts?.length
+    ? stats.reasoning_efforts
+        .map(
+          (item) => `<div class="dist-row">
+        <span class="name" title="${esc(item.reasoning_effort)}">${esc(item.reasoning_effort)}</span>
+        <span class="track"><span class="fill" style="width:${Math.round((item.count / maxReasoning) * 100)}%"></span></span>
+        <span class="num">${fmtNum(item.count)}</span>
+      </div>`,
+        )
+        .join('')
+    : '<div class="facet-empty">暂无思考等级数据</div>';
+
+  const maxHarness = Math.max(1, ...(stats.harnesses || []).map((item) => item.count));
+  const harnesses = stats.harnesses?.length
+    ? stats.harnesses
+        .map(
+          (item) => `<div class="dist-row">
+        <span class="name" title="${esc(item.harness)}">${esc(item.harness)}</span>
+        <span class="track"><span class="fill" style="width:${Math.round((item.count / maxHarness) * 100)}%"></span></span>
+        <span class="num">${fmtNum(item.count)}</span>
+      </div>`,
+        )
+        .join('')
+    : '<div class="facet-empty">暂无 Harness 数据</div>';
+
   const avgLatency = (() => {
     const items = state.records.filter((r) => Number.isFinite(r.latency_ms));
     if (!items.length) return '—';
@@ -1011,6 +1123,17 @@ function renderStats() {
     <section class="panel">
       <h3>标签分布 <small>出现次数</small></h3>
       <div class="dist-list">${tags}</div>
+    </section>
+
+    <section class="stats-grid-two">
+      <div class="panel">
+        <h3>思考等级分布 <small>模型推理强度</small></h3>
+        <div class="dist-list">${reasoning}</div>
+      </div>
+      <div class="panel">
+        <h3>Harness 分布 <small>执行工具覆盖</small></h3>
+        <div class="dist-list">${harnesses}</div>
+      </div>
     </section>`;
 }
 
@@ -1224,6 +1347,11 @@ curl "${base}/api/records?reasoning_effort=high&harness=codex"`,
 
 function renderFacets() {
   const facets = state.facets;
+  $('#reasoningFilterSection').hidden = !facets.reasoning_efforts.length;
+  $('#harnessFilterSection').hidden = !facets.harnesses.length;
+  $('#modelFilterSection').hidden = !facets.models.length;
+  $('#tagFilterSection').hidden = !facets.tags.length;
+  $('#batchFilterSection').hidden = !facets.batches.length;
 
   $('#rangeFilter').innerHTML = RANGES.map(
     (r) => `<button class="chip ${state.filters.range === r.id ? 'active' : ''}" data-act="range" data-value="${r.id}">${esc(r.label)}</button>`,
@@ -1392,6 +1520,17 @@ function confirmDialog({ title = '确认操作', message = '', confirmText = '�
       }
     });
     observer.observe($('#modalRoot'), { attributes: true, attributeFilter: ['hidden'] });
+  });
+}
+
+function openImageLightbox(url, name = '图片预览') {
+  frames.clear();
+  openModal({
+    title: name,
+    size: 'wide',
+    body: `<div class="lightbox"><img src="${esc(url)}" alt="${esc(name)}"></div>`,
+    footer: `<a class="ghost-button" href="${esc(url)}" target="_blank" rel="noopener">新窗口打开</a>
+             <a class="button primary" href="${esc(url)}" download>下载图片</a>`,
   });
 }
 
@@ -1884,89 +2023,107 @@ function recordFormBody(record = {}) {
     .join('');
   const localTime = record.created_at_ms ? new Date(record.created_at_ms - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
   return `
-    <div class="field">
-      <label for="f-title">标题</label>
-      <input class="input" id="f-title" value="${esc(record.title || '')}" placeholder="留空会自动取提示词首行">
-    </div>
-    <div class="field" style="margin-top:12px">
-      <label for="f-prompt">提示词</label>
-      <textarea class="textarea" id="f-prompt" placeholder="这次测试用的提示词">${esc(record.prompt || '')}</textarea>
-    </div>
-    <div class="field-row" style="margin-top:12px">
-      <div class="field">
-        <label for="f-model">模型</label>
-        <input class="input" id="f-model" list="model-options" value="${esc(record.model || '')}" placeholder="gpt-5.1">
-        <datalist id="model-options">${modelOptions}</datalist>
+    <section class="form-section">
+      <div class="form-section-head">
+        <span class="form-section-step">01</span>
+        <div><h4>测试条件</h4><p>先锁定模型、思考等级和执行 Harness。</p></div>
       </div>
       <div class="field">
-        <label for="f-type">结果类型</label>
-        <select id="f-type">
-          <option value="">自动推断</option>
-          ${TYPES.map((t) => `<option value="${t.id}" ${record.result_type === t.id ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}
-        </select>
+        <label for="f-title">标题</label>
+        <input class="input" id="f-title" value="${esc(record.title || '')}" placeholder="留空会自动取提示词首行">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-model">模型</label>
+          <input class="input" id="f-model" list="model-options" value="${esc(record.model || '')}" placeholder="gpt-5.1">
+          <datalist id="model-options">${modelOptions}</datalist>
+        </div>
+        <div class="field">
+          <label for="f-reasoning">思考等级</label>
+          <input class="input" id="f-reasoning" list="reasoning-options" value="${esc(record.reasoning_effort || '')}" placeholder="none / low / medium / high">
+          <datalist id="reasoning-options">${reasoningOptions}</datalist>
+        </div>
+        <div class="field">
+          <label for="f-harness">Harness</label>
+          <input class="input" id="f-harness" list="harness-options" value="${esc(record.harness || '')}" placeholder="codex / claude-code / cursor">
+          <datalist id="harness-options">${harnessOptions}</datalist>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-type">结果类型</label>
+          <select id="f-type">
+            <option value="">自动推断</option>
+            ${TYPES.map((t) => `<option value="${t.id}" ${record.result_type === t.id ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-status">状态</label>
+          <select id="f-status">
+            ${STATUSES.map((s) => `<option value="${s.id}" ${(record.status || 'ok') === s.id ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+    </section>
+    <section class="form-section">
+      <div class="form-section-head">
+        <span class="form-section-step">02</span>
+        <div><h4>测试内容</h4><p>提示词与模型输出，结果文件可以直接拖入。</p></div>
       </div>
       <div class="field">
-        <label for="f-status">状态</label>
-        <select id="f-status">
-          ${STATUSES.map((s) => `<option value="${s.id}" ${(record.status || 'ok') === s.id ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    <div class="field-row" style="margin-top:12px">
-      <div class="field">
-        <label for="f-reasoning">思考等级</label>
-        <input class="input" id="f-reasoning" list="reasoning-options" value="${esc(record.reasoning_effort || '')}" placeholder="none / low / medium / high">
-        <datalist id="reasoning-options">${reasoningOptions}</datalist>
+        <label for="f-prompt">提示词</label>
+        <textarea class="textarea" id="f-prompt" placeholder="这次测试用的提示词">${esc(record.prompt || '')}</textarea>
       </div>
       <div class="field">
-        <label for="f-harness">Harness</label>
-        <input class="input" id="f-harness" list="harness-options" value="${esc(record.harness || '')}" placeholder="codex / claude-code / cursor">
-        <datalist id="harness-options">${harnessOptions}</datalist>
+        <label for="f-result">结果内容 <em class="label-note">文本直接写；文件拖进来就是结果</em></label>
+        <div class="dropzone" id="resultDrop">
+          <input type="file" class="file-overlay" id="resultFileInput" multiple aria-label="选择文件作为结果">
+          <span>把结果文件拖到这里，或</span>
+          <span class="ghost-button">选择文件作为结果</span>
+          <span class="spacer"></span>
+          <span class="hint">HTML / MD / JSON / TXT 读取内容；图片、PDF、压缩包等存成文件结果</span>
+        </div>
+        <textarea class="textarea" id="f-result" style="min-height:180px" placeholder="${resultFile ? `已选择文件作为结果：${esc(resultFile.name)}` : '文本、HTML、Markdown、JSON 都可以，直接粘贴'}" ${resultFile ? 'disabled' : ''}>${resultFile ? '' : esc(record.result || '')}</textarea>
+        <span class="hint">HTML 会在界面里用沙箱 iframe 渲染，可以正常执行脚本、加载样式。</span>
+        <div id="resultPreview">${resultPreviewHtml()}</div>
       </div>
-    </div>
-    <div class="field" style="margin-top:12px">
-      <label for="f-result">结果内容 <em class="label-note">文本直接写；文件拖进来就是结果</em></label>
-      <div class="dropzone" id="resultDrop">
-        <input type="file" class="file-overlay" id="resultFileInput" multiple aria-label="选择文件作为结果">
-        <span>把结果文件拖到这里，或</span>
-        <span class="ghost-button">选择文件作为结果</span>
-        <span class="spacer"></span>
-        <span class="hint">HTML / MD / JSON / TXT 读取内容；图片、PDF、压缩包等存成文件结果</span>
+    </section>
+    <section class="form-section">
+      <div class="form-section-head">
+        <span class="form-section-step">03</span>
+        <div><h4>归档信息</h4><p>批次、标签、性能指标和附加文件。</p></div>
       </div>
-      <textarea class="textarea" id="f-result" style="min-height:180px" placeholder="${resultFile ? `已选择文件作为结果：${esc(resultFile.name)}` : '文本、HTML、Markdown、JSON 都可以，直接粘贴'}" ${resultFile ? 'disabled' : ''}>${resultFile ? '' : esc(record.result || '')}</textarea>
-      <span class="hint">HTML 会在界面里用沙箱 iframe 渲染，可以正常执行脚本、加载样式。</span>
-      <div id="resultPreview">${resultPreviewHtml()}</div>
-    </div>
-    <div class="field-row" style="margin-top:12px">
+      <div class="field-row">
+        <div class="field">
+          <label for="f-tags">标签</label>
+          <input class="input" id="f-tags" value="${esc((record.tags || []).join(', '))}" placeholder="逗号分隔，如：对比, 数学">
+        </div>
+        <div class="field">
+          <label for="f-batch">批次</label>
+          <input class="input" id="f-batch" list="batch-options" value="${esc(record.batch_name || '')}" placeholder="同批次可一键对比">
+          <datalist id="batch-options">${batchOptions}</datalist>
+        </div>
+      </div>
+      ${uploadFieldHtml()}
+      <div class="field-row">
+        <div class="field">
+          <label for="f-latency">耗时（毫秒）</label>
+          <input class="input" id="f-latency" type="number" min="0" value="${record.latency_ms === null || record.latency_ms === undefined ? '' : esc(record.latency_ms)}">
+        </div>
+        <div class="field">
+          <label for="f-tokens">总 tokens</label>
+          <input class="input" id="f-tokens" type="number" min="0" value="${record.total_tokens ? esc(record.total_tokens) : ''}">
+        </div>
+        <div class="field">
+          <label for="f-time">记录时间 <em class="label-note">留空则用当前时间</em></label>
+          <input class="input" id="f-time" type="datetime-local" value="${esc(localTime)}">
+        </div>
+      </div>
       <div class="field">
-        <label for="f-tags">标签</label>
-        <input class="input" id="f-tags" value="${esc((record.tags || []).join(', '))}" placeholder="逗号分隔，如：对比, 数学">
+        <label for="f-note">备注</label>
+        <input class="input" id="f-note" value="${esc((record.meta && record.meta.note) || '')}" placeholder="可选">
       </div>
-      <div class="field">
-        <label for="f-batch">批次</label>
-        <input class="input" id="f-batch" list="batch-options" value="${esc(record.batch_name || '')}" placeholder="同批次可一键对比">
-        <datalist id="batch-options">${batchOptions}</datalist>
-      </div>
-    </div>
-    <div style="margin-top:12px">${uploadFieldHtml()}</div>
-    <div class="field-row" style="margin-top:12px">
-      <div class="field">
-        <label for="f-latency">耗时（毫秒）</label>
-        <input class="input" id="f-latency" type="number" min="0" value="${record.latency_ms === null || record.latency_ms === undefined ? '' : esc(record.latency_ms)}">
-      </div>
-      <div class="field">
-        <label for="f-tokens">总 tokens</label>
-        <input class="input" id="f-tokens" type="number" min="0" value="${record.total_tokens ? esc(record.total_tokens) : ''}">
-      </div>
-      <div class="field">
-        <label for="f-time">记录时间 <em class="label-note">留空则用当前时间</em></label>
-        <input class="input" id="f-time" type="datetime-local" value="${esc(localTime)}">
-      </div>
-    </div>
-    <div class="field" style="margin-top:12px">
-      <label for="f-note">备注</label>
-      <input class="input" id="f-note" value="${esc((record.meta && record.meta.note) || '')}" placeholder="可选">
-    </div>`;
+    </section>`;
 }
 
 function readForm() {
@@ -2328,6 +2485,12 @@ function bindEvents() {
     loadRecords();
   });
 
+  $('#densityToggle').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-density]');
+    if (!button) return;
+    applyDensity(button.dataset.density);
+  });
+
   $('#pageSizeSelect').addEventListener('change', (event) => {
     state.limit = Number(event.target.value);
     loadRecords();
@@ -2408,6 +2571,37 @@ function bindEvents() {
       await loadRecords();
       return;
     }
+    if (act === 'remove-filter') {
+      const kind = el.dataset.kind;
+      const value = el.dataset.value;
+      if (kind === 'model') state.filters.models = state.filters.models.filter((item) => item !== value);
+      else if (kind === 'tag') state.filters.tags = state.filters.tags.filter((item) => item !== value);
+      else if (kind === 'type') state.filters.types = state.filters.types.filter((item) => item !== value);
+      else if (kind === 'status') state.filters.status = state.filters.status.filter((item) => item !== value);
+      else if (kind === 'reasoning') state.filters.reasoning_efforts = state.filters.reasoning_efforts.filter((item) => item !== value);
+      else if (kind === 'harness') state.filters.harnesses = state.filters.harnesses.filter((item) => item !== value);
+      else if (kind === 'batch') state.filters.batch_id = '';
+      else if (kind === 'range') state.filters.range = 'all';
+      renderFacets();
+      await loadRecords();
+      return;
+    }
+    if (act === 'clear-filters') {
+      state.filters = {
+        q: $('#searchInput').value.trim(),
+        models: [],
+        tags: [],
+        types: [],
+        status: [],
+        reasoning_efforts: [],
+        harnesses: [],
+        batch_id: '',
+        range: 'all',
+      };
+      renderFacets();
+      await loadRecords();
+      return;
+    }
     if (act === 'new-batch') {
       await createBatch();
       return;
@@ -2439,6 +2633,11 @@ function bindEvents() {
       state.compare = state.compare.filter((x) => x !== id);
       renderFacets();
       renderCurrentView();
+      return;
+    }
+    if (act === 'lightbox') {
+      event.preventDefault();
+      openImageLightbox(el.dataset.url, el.dataset.name || '图片预览');
       return;
     }
 
@@ -2478,7 +2677,10 @@ function bindEvents() {
     if (act === 'frame-reload') {
       const frame = el.closest('.frame-wrap')?.querySelector('iframe');
       const key = frame?.dataset.frame;
-      if (frame && key) frame.setAttribute('srcdoc', frames.get(key) || '');
+      if (frame && key) {
+        frame.setAttribute('srcdoc', frames.get(key) || '');
+        frame.removeAttribute('data-lazy');
+      }
       return;
     }
     if (act === 'open') {
@@ -2612,6 +2814,20 @@ function applyTheme(theme) {
   localStorage.setItem('mtl.theme', document.documentElement.dataset.theme);
 }
 
+function applyDensity(density) {
+  state.density = density === 'compact' ? 'compact' : 'comfortable';
+  document.body.classList.toggle('density-compact', state.density === 'compact');
+  $$('#densityToggle [data-density]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.density === state.density);
+    button.setAttribute('aria-pressed', button.dataset.density === state.density ? 'true' : 'false');
+  });
+  try {
+    localStorage.setItem('mtl.density', state.density);
+  } catch {
+    /* ignore */
+  }
+}
+
 function syncSidebarUi() {
   const collapsed = document.body.classList.contains('sidebar-collapsed');
   const button = $('#sidebarToggle');
@@ -2633,6 +2849,7 @@ function toggleSidebar() {
 
 async function boot() {
   applyTheme(localStorage.getItem('mtl.theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+  applyDensity(localStorage.getItem('mtl.density') || 'comfortable');
   setSidebarCollapsed(localStorage.getItem('mtl.sidebar') === '1' && window.innerWidth > 900);
 
   state.limit = Number($('#pageSizeSelect').value) || 50;
