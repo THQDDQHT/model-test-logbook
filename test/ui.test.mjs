@@ -198,6 +198,8 @@ test('上传文件当结果 → 保存 → 卡片里用沙箱 iframe 渲染', { 
   assert.ok(frame, 'HTML 结果必须渲染成沙箱 iframe，而不是纯文本');
   assert.ok(frame.getAttribute('srcdoc').includes('上传的标题'), 'iframe 里应当有上传的 HTML 内容');
   assert.match(frame.getAttribute('sandbox') || '', /allow-scripts/);
+  dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: { __mtlHeight: 1, id: frame.dataset.frame, h: 2000 } }));
+  assert.ok(parseFloat(frame.style.height) <= 320, '未展开时 iframe 高度必须限制在预览高度内');
   assert.ok(!card.querySelector('pre.text-block'), '不应该退化成 <pre> 文本块');
   assert.match(card.textContent, /思考\s*high/);
   assert.match(card.textContent, /Harness\s*codex/);

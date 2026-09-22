@@ -601,7 +601,8 @@ window.addEventListener('message', (event) => {
   if (!frame) return;
   const wrap = frame.closest('.frame-wrap');
   if (wrap && wrap.classList.contains('expanded')) return;
-  const height = Math.max(90, Math.min(Number(data.h) || 0, 2400));
+  const maxHeight = document.body.classList.contains('density-compact') ? 240 : 320;
+  const height = Math.max(90, Math.min(Number(data.h) || 0, maxHeight));
   frame.style.height = `${height}px`;
 });
 
