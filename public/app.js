@@ -73,6 +73,27 @@ const state = {
 const frames = new Map();
 let frameSeq = 0;
 
+// 界面图标：统一 24 网格、1.8 描边
+const ICON_PATHS = {
+  expand: 'm7 15 5 5 5-5M7 9l5-5 5 5',
+  collapse: 'm7 20 5-5 5 5M7 4l5 5 5-5',
+  shield: 'M12 21.5s7.5-3.6 7.5-9.4V5.6L12 2.8 4.5 5.6v6.5c0 5.8 7.5 9.4 7.5 9.4z',
+  reload: 'M20.5 12a8.5 8.5 0 1 1-2.5-6l2.5 2.5M20.5 3.5v5h-5',
+  external: 'M14 3.5h6.5V10M10.5 13.5l10-10M19 14v5a1.5 1.5 0 0 1-1.5 1.5h-12A1.5 1.5 0 0 1 4 19V7a1.5 1.5 0 0 1 1.5-1.5h5',
+  download: 'M12 3.5v12m0 0-5-5m5 5 5-5M4.5 20.5h15',
+  file: 'M14 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8zM14 3.5V8h4.5',
+  close: 'M6 6l12 12M18 6 6 18',
+  prev: 'm14.5 18-6-6 6-6',
+  next: 'm9.5 18 6-6-6-6',
+  chevron: 'm6.5 9.5 5.5 5.5 5.5-5.5',
+  'zoom-in': 'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.9-4.9M10.5 7.8v5.4M7.8 10.5h5.4',
+  'zoom-out': 'M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.9-4.9M7.8 10.5h5.4',
+};
+
+function icon(name, size = 14) {
+  return `<svg class="icon" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON_PATHS[name] || ''}"/></svg>`;
+}
+
 /* ------------------------------------------------------------------ *
  * 基础工具
  * ------------------------------------------------------------------ */
@@ -377,52 +398,210 @@ function mdToHtml(source) {
  * 结果渲染
  * ------------------------------------------------------------------ */
 
-function frameSrcdoc(html, key) {
-  const probe =
-    '<scr' +
-    'ipt>(function(){function s(){try{var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);parent.postMessage({__mtlHeight:1,id:' +
-    JSON.stringify(key) +
-    ",h:h},'*')}catch(e){}}" +
-    "if(document.readyState!=='loading'){s()}else{document.addEventListener('DOMContentLoaded',s)}" +
-    'window.addEventListener("load",s);setTimeout(s,80);setTimeout(s,400);setTimeout(s,1200);' +
-    'try{if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}}catch(e){}})();</scr' +
-    'ipt>';
+/**
+ * 注入结果 iframe 的量高脚本，以源码形式塞进 srcdoc，必须自包含、只用老语法。
+ * 报告的是内容的「自然高度」：普通文档就是滚动高度；铺满视口的作品
+ * （html,body{height:100%} / min-height:100vh + 居中）则量真实内容的外框，
+ * 否则 iframe 多高、内容就多高，永远量不到原图尺寸。
+ */
+function frameProbe(key) {
+  var SKIP = { SCRIPT: 1, STYLE: 1, LINK: 1, META: 1, TITLE: 1, TEMPLATE: 1, NOSCRIPT: 1, BR: 1 };
+  var last = -1;
+  var timer = 0;
+  // 认定过是「内容」的元素不再被当成撑满视口的容器：iframe 收紧到内容高度后，
+  // 内容本身的高度恰好等于视口，不能因此把它跳过
+  var content = window.WeakSet ? new WeakSet() : null;
 
+  function px(value) {
+    return parseFloat(value) || 0;
+  }
+
+  function edge(style, side) {
+    return px(style['margin' + side]) + px(style['border' + side + 'Width']) + px(style['padding' + side]);
+  }
+
+  // 收集内容外框：被视口撑满的容器只往里看、不算进外框；裁剪了溢出的容器不再往里看
+  function walk(el, box, size) {
+    for (var child = el.firstElementChild; child; child = child.nextElementSibling) {
+      if (SKIP[child.tagName]) continue;
+      var style = getComputedStyle(child);
+      if (style.display === 'none' || style.position === 'fixed') continue;
+      var rect = child.getBoundingClientRect();
+      if (!rect.width || !rect.height) {
+        walk(child, box, size);
+        continue;
+      }
+      var top = rect.top;
+      var bottom = rect.bottom;
+      var isSvg = child.tagName.toLowerCase() === 'svg';
+      var vb = isSvg && child.viewBox && child.viewBox.baseVal;
+      var shaped = !!(vb && vb.width > 0 && vb.height > 0 && !/none/.test(child.getAttribute('preserveAspectRatio') || ''));
+      if (shaped) {
+        // 带 viewBox 的 SVG 按宽度和画布比例算应有的高度，不跟着容器高度走
+        var natural = (rect.width * vb.height) / vb.width;
+        top = rect.top + Math.max(0, (rect.height - natural) / 2);
+        bottom = top + natural;
+      }
+      var stretched =
+        !(content && content.has(child)) &&
+        (Math.abs(rect.height - size.viewport) < 1.5 || Math.abs(rect.height - size.inner) < 1.5);
+      if (!stretched && content) content.add(child);
+      if ((shaped || !stretched) && style.visibility !== 'hidden') {
+        if (top < box.top) box.top = top;
+        if (bottom > box.bottom) box.bottom = bottom;
+      }
+      if (!isSvg && (stretched || style.overflowY === 'visible')) walk(child, box, size);
+    }
+  }
+
+  function measure() {
+    var doc = document.documentElement;
+    var body = document.body;
+    if (!body) return 0;
+    var viewport = window.innerHeight;
+    var scrollHeight = Math.max(doc.scrollHeight, body.scrollHeight);
+    var htmlStyle = getComputedStyle(doc);
+    var bodyStyle = getComputedStyle(body);
+    var bodyRect = body.getBoundingClientRect();
+    var padTop = edge(htmlStyle, 'Top') + edge(bodyStyle, 'Top');
+    var padBottom = edge(htmlStyle, 'Bottom') + edge(bodyStyle, 'Bottom');
+    // body 被视口撑满（height:100% / min-height:100vh 之类）。content-box 下带 padding 的 body
+    // 会比视口高出一截，也算撑满，否则每次按滚动高度放大都会再多出一截 padding，越量越高
+    var bodyInner = bodyRect.height - edge(bodyStyle, 'Top') - edge(bodyStyle, 'Bottom') + px(bodyStyle.marginTop) + px(bodyStyle.marginBottom);
+    var filling =
+      Math.abs(bodyRect.height + px(bodyStyle.marginTop) + px(bodyStyle.marginBottom) - viewport) < 1.5 ||
+      Math.abs(bodyRect.height - viewport) < 1.5 ||
+      Math.abs(bodyInner - viewport) < 1.5;
+    // 普通的长文档：滚动高度就是自然高度
+    if (!filling && scrollHeight > viewport + 1) return scrollHeight;
+
+    var box = { top: Infinity, bottom: -Infinity };
+    walk(body, box, { viewport: viewport, inner: viewport - padTop - padBottom });
+    var scrollY = window.scrollY || 0;
+    if (!filling) {
+      var flowBottom = bodyRect.bottom + scrollY + px(bodyStyle.marginBottom);
+      return box.bottom > -Infinity ? Math.max(flowBottom, box.bottom + scrollY) : flowBottom;
+    }
+    // 内容完全跟着视口走（全屏 canvas 之类）：没有「原图」可言，保持当前高度
+    if (box.bottom === -Infinity) return viewport;
+    var above = box.top + scrollY - padTop;
+    var below = viewport - padBottom - (box.bottom + scrollY);
+    // 被裁掉就补回来；有空余就收紧（居中布局上下各收一份，顶部对齐时多收的下一轮会补回）
+    if (above < -0.5 || below < -0.5) return viewport + Math.max(0, -above) + Math.max(0, -below);
+    return viewport - below - Math.min(above, below);
+  }
+
+  function report() {
+    timer = 0;
+    var height;
+    try {
+      height = Math.ceil(measure());
+    } catch (e) {
+      return;
+    }
+    if (!height || height === last) return;
+    last = height;
+    parent.postMessage({ __mtlHeight: 1, id: key, h: height }, '*');
+  }
+
+  // 沙箱 iframe 是跨源的，离屏时 rAF 可能被暂停，所以用定时器合并多次触发
+  function schedule() {
+    if (!timer) timer = setTimeout(report, 16);
+  }
+
+  if (document.readyState !== 'loading') schedule();
+  else document.addEventListener('DOMContentLoaded', schedule);
+  window.addEventListener('load', schedule);
+  window.addEventListener('resize', schedule);
+  document.addEventListener('load', schedule, true);
+  [80, 400, 1200, 2500].forEach(function (ms) {
+    setTimeout(schedule, ms);
+  });
+  try {
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
+    if (window.ResizeObserver) {
+      var observer = new ResizeObserver(schedule);
+      observer.observe(document.documentElement);
+      if (document.body) observer.observe(document.body);
+    }
+  } catch (e) {
+    /* 老浏览器靠定时器兜底 */
+  }
+}
+
+function frameSrcdoc(html, key) {
+  const probe = '<scr' + 'ipt>(' + frameProbe.toString() + ')(' + JSON.stringify(key) + ');</scr' + 'ipt>';
   const source = String(html ?? '');
-  if (/<\/body\s*>/i.test(source)) return source.replace(/<\/body\s*>/i, `${probe}</body>`);
+  if (/<\/body\s*>/i.test(source)) return source.replace(/<\/body\s*>/i, () => `${probe}</body>`);
   if (/<html[\s>]/i.test(source)) return source + probe;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:0;font:14px/1.6 Inter,system-ui,-apple-system,"PingFang SC",sans-serif}img{max-width:100%}</style></head><body>${source}${probe}</body></html>`;
 }
 
-function renderHtmlFrame(record, content, { full = false, key = null, note = true } = {}) {
+function frameDoc(key) {
+  const entry = frames.get(key);
+  return entry ? entry.doc : '';
+}
+
+// HTML 源码 -> 上次量到的自然高度。重渲染时先按它占位，避免高度从默认值跳过去
+const frameHeights = new Map();
+const FRAME_MIN = 80;
+const FRAME_MAX = 40000;
+// 折叠态只比上限高出一点时不裁，免得为几十像素多点一次
+const FRAME_CAP_SLACK = 48;
+
+function frameCap(wrap) {
+  const value = wrap ? parseFloat(getComputedStyle(wrap).getPropertyValue('--frame-cap')) : NaN;
+  return Number.isFinite(value) && value > 0 ? value : 560;
+}
+
+function renderHtmlFrame(record, content, { full = false, key = null, note = true, collapsible = true } = {}) {
   const frameKey = key || `frame-${++frameSeq}`;
-  frames.set(frameKey, frameSrcdoc(content, frameKey));
+  const source = String(content ?? '');
+  frames.set(frameKey, { doc: frameSrcdoc(source, frameKey), source });
+  const cached = frameHeights.get(source);
+  const expanded = full || !collapsible;
+  const classes = ['frame-wrap', collapsible && 'collapsible', expanded && 'expanded', !note && 'is-draft'].filter(Boolean).join(' ');
   return `
-    <div class="frame-wrap ${full ? 'expanded' : ''}">
-      <iframe class="result-frame" data-frame="${frameKey}" sandbox="allow-scripts allow-popups allow-forms allow-modals" title="结果预览"></iframe>
+    <div class="${classes}"${cached ? ` style="--frame-h:${cached}px"` : ''}>
+      <div class="frame-viewport">
+        <iframe class="result-frame" data-frame="${frameKey}"${cached ? ` style="height:${cached}px"` : ''} sandbox="allow-scripts allow-popups allow-forms allow-modals" title="结果预览"></iframe>
+        ${
+          collapsible
+            ? `<div class="frame-fade"><button type="button" class="frame-more" data-act="frame-full">${icon('expand')}<span>展开完整高度</span></button></div>`
+            : ''
+        }
+      </div>
       ${
         note
-          ? `<div class="frame-note">
-        <span>沙箱 iframe 内渲染 · 脚本可运行但与主页面隔离</span>
-        <span class="spacer" style="flex:1"></span>
-        <button class="ghost-button" data-act="frame-reload" data-frame="${frameKey}">重载</button>
+          ? `<div class="frame-bar">
+        <span class="frame-bar-info" title="在沙箱 iframe 内渲染：脚本可运行，但与记录台页面隔离">${icon('shield')}<span>沙箱渲染</span><span class="frame-size" data-frame-size></span></span>
+        <span class="spacer"></span>
+        ${
+          collapsible
+            ? `<button type="button" class="frame-tool frame-toggle" data-act="frame-full">${icon(expanded ? 'collapse' : 'expand')}<span>${expanded ? '收起' : '展开全部'}</span></button>`
+            : ''
+        }
+        <button type="button" class="frame-tool" data-act="frame-reload" data-frame="${frameKey}">${icon('reload')}<span>重载</span></button>
+        ${record ? `<a class="frame-tool" href="/r/${encodeURIComponent(record.id)}" target="_blank" rel="noopener">${icon('external')}<span>新窗口</span></a>` : ''}
       </div>`
           : ''
       }
     </div>`;
 }
 
-/** 用 src 直接挂一个 HTML 文件（不注入探针，高度固定；沙箱里量不到跨文档高度） */
+/** 用 src 直接挂一个 HTML 文件（沙箱里量不到跨文档高度，给固定高度） */
 function renderHtmlFrameSrc(url, label) {
   const name = label || basenameOf(url);
   return `
-    <div class="frame-wrap">
-      <iframe class="result-frame external" src="${esc(url)}" sandbox="allow-scripts allow-popups allow-forms allow-modals" title="${esc(name)}"></iframe>
-      <div class="frame-note">
-        <span>HTML 文件：${esc(name)} · 沙箱渲染</span>
-        <span class="spacer" style="flex:1"></span>
-        <a class="ghost-button" href="${esc(url)}" target="_blank" rel="noopener">新窗口打开</a>
-        <a class="ghost-button" href="${esc(url)}" download>下载</a>
+    <div class="frame-wrap expanded">
+      <div class="frame-viewport">
+        <iframe class="result-frame external" src="${esc(url)}" sandbox="allow-scripts allow-popups allow-forms allow-modals" title="${esc(name)}"></iframe>
+      </div>
+      <div class="frame-bar">
+        <span class="frame-bar-info">${icon('file')}<span>${esc(name)}</span></span>
+        <span class="spacer"></span>
+        <a class="frame-tool" href="${esc(url)}" target="_blank" rel="noopener">${icon('external')}<span>新窗口</span></a>
+        <a class="frame-tool" href="${esc(url)}" download>${icon('download')}<span>下载</span></a>
       </div>
     </div>`;
 }
@@ -465,12 +644,18 @@ function findAttachment(record, url) {
   return record.attachments.find((att) => att && att.url === url) || null;
 }
 
-function imageGridHtml(urls) {
+/** 结果正文为空、只挂了图片附件（常见于生图模型）时，这些图片就是结果 */
+function resultImagesOf(record) {
+  if (!record || record.result || (Array.isArray(record.parts) && record.parts.length) || htmlAttachmentOf(record)) return [];
+  return (record.attachments || []).filter((att) => att && att.kind === 'image');
+}
+
+function imageGridHtml(urls, names = []) {
   return `<div class="image-grid ${urls.length === 1 ? 'single' : ''}">${urls
-    .map(
-      (url) =>
-        `<a class="image-item" href="${esc(url)}" data-act="lightbox" data-url="${esc(url)}" data-name="结果图片" target="_blank" rel="noopener"><img src="${esc(url)}" alt="结果图片" loading="lazy"></a>`,
-    )
+    .map((url, index) => {
+      const name = names[index] || basenameOf(url) || '结果图片';
+      return `<a class="image-item" href="${esc(url)}" data-act="lightbox" data-url="${esc(url)}" data-name="${esc(name)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="${esc(name)}" loading="lazy"></a>`;
+    })
     .join('')}</div>`;
 }
 
@@ -536,6 +721,8 @@ function renderResultBody(record, opts = {}) {
   if (!record.result) {
     const htmlAtt = htmlAttachmentOf(record);
     if (htmlAtt) return renderHtmlFrameSrc(htmlAtt.url, htmlAtt.name);
+    const images = resultImagesOf(record);
+    if (images.length) return imageGridHtml(images.map((att) => att.url), images.map((att) => att.name));
     return '<div class="muted-block">（没有结果内容）</div>';
   }
 
@@ -549,6 +736,12 @@ function renderResultBody(record, opts = {}) {
 /** 插入 DOM 后再把 srcdoc 写进 iframe，避免属性转义问题 */
 let frameObserver = null;
 
+/** 还没量到高度前的占位：按常见窗口比例给，铺满视口的作品也会以这个比例为基准排版 */
+function initialFrameHeight(frame) {
+  const width = frame.clientWidth || (frame.parentElement && frame.parentElement.clientWidth) || 960;
+  return Math.round(Math.min(720, Math.max(360, width * 0.5625)));
+}
+
 function loadFrame(frame) {
   const key = frame.getAttribute('data-frame');
   if (!key || !frames.has(key)) return;
@@ -561,7 +754,9 @@ function loadFrame(frame) {
     },
     { once: true },
   );
-  frame.setAttribute('srcdoc', frames.get(key));
+  frame._mtlFrozen = false;
+  frame._mtlResizes = [];
+  frame.setAttribute('srcdoc', frameDoc(key));
   frame.removeAttribute('data-lazy');
   if (frameObserver) frameObserver.unobserve(frame);
 }
@@ -569,6 +764,9 @@ function loadFrame(frame) {
 function hydrateFrames(root = document) {
   const candidates = $$('iframe[data-frame]', root).filter((frame) => frame.getAttribute('srcdoc') === null);
   if (!candidates.length) return;
+  candidates.forEach((frame) => {
+    if (!frame.style.height) syncFrameHeight(frame, initialFrameHeight(frame));
+  });
   if (!('IntersectionObserver' in window)) {
     candidates.forEach(loadFrame);
     return;
@@ -589,16 +787,54 @@ function hydrateFrames(root = document) {
   });
 }
 
+/** iframe 始终按自然高度排版；折叠只是外层视口裁掉下半截，所以两种状态看到的都是原图 */
+function syncFrameHeight(frame, height, measured = false) {
+  frame.style.height = `${height}px`;
+  const wrap = frame.closest('.frame-wrap');
+  if (!wrap) return;
+  wrap.style.setProperty('--frame-h', `${height}px`);
+  wrap.classList.toggle('is-tall', wrap.classList.contains('collapsible') && height > frameCap(wrap) + FRAME_CAP_SLACK);
+  const size = wrap.querySelector('[data-frame-size]');
+  if (size && measured) size.textContent = `高 ${fmtNum(height)} px`;
+}
+
+function refreshFrameCaps(root = document) {
+  $$('.frame-wrap.collapsible', root).forEach((wrap) => {
+    const frame = wrap.querySelector('iframe[data-frame]');
+    const height = frame && parseFloat(frame.style.height);
+    if (height) syncFrameHeight(frame, height);
+  });
+}
+
+function setFrameExpanded(wrap, expanded) {
+  wrap.classList.toggle('expanded', expanded);
+  const toggle = wrap.querySelector('.frame-toggle');
+  if (toggle) toggle.innerHTML = `${icon(expanded ? 'collapse' : 'expand')}<span>${expanded ? '收起' : '展开全部'}</span>`;
+}
+
 window.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || typeof data !== 'object' || !data.__mtlHeight) return;
-  const frame = document.querySelector(`iframe[data-frame="${data.id}"]`);
-  if (!frame) return;
-  const wrap = frame.closest('.frame-wrap');
-  if (wrap && wrap.classList.contains('expanded')) return;
-  const maxHeight = document.body.classList.contains('density-compact') ? 240 : 320;
-  const height = Math.max(90, Math.min(Number(data.h) || 0, maxHeight));
-  frame.style.height = `${height}px`;
+  const frame = $$('iframe[data-frame]').find((item) => item.dataset.frame === String(data.id));
+  if (!frame || (event.source && event.source !== frame.contentWindow)) return;
+  const height = Math.round(Math.min(FRAME_MAX, Math.max(FRAME_MIN, Number(data.h) || 0)));
+  const current = parseFloat(frame.style.height) || 0;
+  if (Math.abs(height - current) < 2) {
+    syncFrameHeight(frame, current, true);
+    return;
+  }
+  // 高度和视口互相牵连的作品（比如 height: 80vh）会越量越偏；短时间内调整过多就停在当前高度
+  if (frame._mtlFrozen) return;
+  const now = Date.now();
+  frame._mtlResizes = (frame._mtlResizes || []).filter((time) => now - time < 2000);
+  frame._mtlResizes.push(now);
+  if (frame._mtlResizes.length > 24) {
+    frame._mtlFrozen = true;
+    return;
+  }
+  const entry = frames.get(frame.dataset.frame);
+  if (entry) frameHeights.set(entry.source, height);
+  syncFrameHeight(frame, height, true);
 });
 
 /* ------------------------------------------------------------------ *
@@ -623,17 +859,32 @@ function tagBadges(record) {
 
 function attachmentStripItem(att) {
   if (!att) return '';
+  const title = `${att.name}（${fmtBytes(att.size)}）`;
   if (att.kind === 'image') {
-    return `<a class="thumb" href="${esc(att.url)}" target="_blank" rel="noopener" title="${esc(att.name)}（${fmtBytes(att.size)}）"><img src="${esc(att.url)}" alt="${esc(att.name)}" loading="lazy"></a>`;
+    return `<a class="thumb" href="${esc(att.url)}" data-act="lightbox" data-url="${esc(att.url)}" data-name="${esc(att.name)}" target="_blank" rel="noopener" title="${esc(title)}"><img src="${esc(att.url)}" alt="${esc(att.name)}" loading="lazy"></a>`;
   }
-  return `<a class="file-chip" href="${esc(att.url)}" target="_blank" rel="noopener" title="${esc(att.name)}">${esc(fileExt(att.name))} · ${esc(att.name)}（${fmtBytes(att.size)}）</a>`;
+  return `<a class="file-chip" href="${esc(att.url)}" target="_blank" rel="noopener" title="${esc(title)}"><span class="file-chip-ext">${esc(fileExt(att.name))}</span><span class="file-chip-name">${esc(att.name)}</span><span class="file-chip-size">${fmtBytes(att.size)}</span></a>`;
 }
 
-/** 卡片底部的附件缩略图；已经被当作结果展示的那个文件不再重复出现 */
+/** 卡片底部的附件缩略图；已经被当作结果展示的文件不再重复出现 */
 function attachmentStripHtml(record) {
-  const list = (record.attachments || []).filter((att) => att && att.url !== record.result);
+  const shown = new Set(resultImagesOf(record).map((att) => att.url));
+  const list = (record.attachments || []).filter((att) => att && att.url !== record.result && !shown.has(att.url));
   if (!list.length) return '';
   return `<div class="attachment-strip">${list.map(attachmentStripItem).join('')}</div>`;
+}
+
+/** 转义后把网址变成可点的链接 */
+function linkify(text) {
+  return esc(text).replace(/https?:\/\/[^\s<>"']+/g, (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+}
+
+/** HTML 结果的「预览 / 源码」切换 */
+function modeSwitchHtml(mode) {
+  return `<div class="segmented" role="group" aria-label="结果显示方式">
+    <button type="button" class="${mode !== 'source' ? 'active' : ''}" data-act="mode" data-mode="preview" aria-pressed="${mode !== 'source'}">预览</button>
+    <button type="button" class="${mode === 'source' ? 'active' : ''}" data-act="mode" data-mode="source" aria-pressed="${mode === 'source'}">源码</button>
+  </div>`;
 }
 
 function renderRecordCard(record, { detail = false } = {}) {
@@ -641,14 +892,14 @@ function renderRecordCard(record, { detail = false } = {}) {
   const picked = state.compare.includes(record.id);
   const prompt = record.prompt || '';
   const promptLong = prompt.length > 260 || prompt.split('\n').length > 4;
+  const promptOpen = ui.promptOpen || detail;
 
-  const metaBits = [];
-  if (record.latency_ms !== null && record.latency_ms !== undefined) metaBits.push(`耗时 <b>${fmtNum(record.latency_ms)} ms</b>`);
-  if (record.total_tokens) metaBits.push(`tokens <b>${fmtNum(record.total_tokens)}</b>`);
-  if (record.cost !== null && record.cost !== undefined && record.cost !== '') metaBits.push(`成本 <b>${record.cost} ${esc(record.currency || '')}</b>`);
-  if (record.provider) metaBits.push(`渠道 <b>${esc(record.provider)}</b>`);
-  if (record.source && record.source !== 'api') metaBits.push(`来源 <b>${esc(record.source)}</b>`);
-  if (record.attachments && record.attachments.length) metaBits.push(`附件 <b>${record.attachments.length}</b>`);
+  const subBits = [`<span title="记录时间 ${esc(fmtAbs(record.created_at_ms))}">${esc(fmtAbs(record.created_at_ms))}</span>`, `<span>${esc(fmtRel(record.created_at_ms))}</span>`];
+  if (record.latency_ms !== null && record.latency_ms !== undefined) subBits.push(`<span>耗时 ${fmtNum(record.latency_ms)} ms</span>`);
+  if (record.total_tokens) subBits.push(`<span>${fmtNum(record.total_tokens)} tokens</span>`);
+  if (record.cost !== null && record.cost !== undefined && record.cost !== '') subBits.push(`<span>成本 ${esc(record.cost)} ${esc(record.currency || '')}</span>`);
+  if (record.provider) subBits.push(`<span>渠道 ${esc(record.provider)}</span>`);
+  if (record.source && record.source !== 'api') subBits.push(`<span>来源 ${esc(record.source)}</span>`);
   const note = record.meta && record.meta.note ? String(record.meta.note) : '';
 
   const facts = [];
@@ -657,34 +908,25 @@ function renderRecordCard(record, { detail = false } = {}) {
     facts.push(`<span class="record-fact"><span>思考</span><strong>${esc(record.reasoning_effort)}</strong></span>`);
   }
   if (record.harness) facts.push(`<span class="record-fact"><span>Harness</span><strong>${esc(record.harness)}</strong></span>`);
-  facts.push(`<span class="record-fact"><span>结果</span><strong>${esc(typeLabel(record.result_type))}</strong></span>`);
   if (record.batch_name) facts.push(`<span class="record-fact"><span>批次</span><strong>${esc(record.batch_name)}</strong></span>`);
+  const tags = record.tags && record.tags.length ? `<span class="record-tags">${tagBadges(record)}</span>` : '';
 
-  const modeTabs =
-    record.result_type === 'html' && !(record.parts && record.parts.length > 1)
-      ? `<button class="ghost-button ${ui.mode !== 'source' ? 'active' : ''}" data-act="mode" data-mode="preview">预览</button>
-         <button class="ghost-button ${ui.mode === 'source' ? 'active' : ''}" data-act="mode" data-mode="source">源码</button>`
-      : '';
+  const isHtml = record.result_type === 'html' && !(record.parts && record.parts.length > 1) && !!record.result;
 
   return `
   <article class="record-card ${picked ? 'picked' : ''}" data-id="${esc(record.id)}">
     <header class="record-head">
       <label class="checkbox" title="加入对比">
-        <input type="checkbox" class="pick-box" data-act="pick" ${picked ? 'checked' : ''}>
+        <input type="checkbox" class="pick-box" data-act="pick" aria-label="加入对比" ${picked ? 'checked' : ''}>
       </label>
       <div class="record-title-wrap">
         <h3 class="record-title">${esc(record.title || '(无标题)')}</h3>
-        <div class="record-sub">
-          <span title="记录时间 ${esc(fmtAbs(record.created_at_ms))}">${esc(fmtAbs(record.created_at_ms))}</span>
-          <span class="dot"></span>
-          <span>${esc(fmtRel(record.created_at_ms))}</span>
-        </div>
+        <div class="record-sub">${subBits.join('<span class="dot"></span>')}</div>
       </div>
       <div class="record-head-right">${statusBadge(record)}</div>
     </header>
 
-    <div class="record-facts">${facts.join('')}</div>
-    ${record.tags && record.tags.length ? `<div class="record-tag-row">${tagBadges(record)}</div>` : ''}
+    ${facts.length || tags ? `<div class="record-facts">${facts.join('')}${tags}</div>` : ''}
 
     ${
       prompt
@@ -692,22 +934,23 @@ function renderRecordCard(record, { detail = false } = {}) {
             <div class="block-head">
               <span class="label">提示词</span>
               <span class="spacer"></span>
-              <button class="link-button" data-act="toggle-prompt">${ui.promptOpen || detail ? '收起' : '展开'}</button>
+              ${
+                promptLong && !detail
+                  ? `<button type="button" class="text-toggle ${promptOpen ? 'open' : ''}" data-act="toggle-prompt" aria-expanded="${promptOpen}"><span>${promptOpen ? '收起' : '展开'}</span>${icon('chevron', 13)}</button>`
+                  : ''
+              }
             </div>
-            <div class="prompt-text ${ui.promptOpen || detail || !promptLong ? '' : 'clamp'}">${esc(prompt)}</div>
+            <div class="prompt-text ${promptOpen || !promptLong ? '' : 'clamp'}">${esc(prompt)}</div>
           </section>`
         : ''
     }
 
     <section class="block result-block">
       <div class="block-head">
-        <span class="label">结果 · ${esc(typeLabel(record.result_type))}</span>
+        <span class="label">结果</span>
+        <span class="type-chip">${esc(typeLabel(record.result_type))}</span>
         <span class="spacer"></span>
-        <div class="block-actions">
-          ${modeTabs}
-          ${record.result_type === 'html' ? `<button class="ghost-button" data-act="frame-full">${ui.full ? '还原高度' : '展开全高'}</button>` : ''}
-          ${record.result_type === 'html' ? `<button class="ghost-button" data-act="open">新窗口</button>` : ''}
-        </div>
+        <div class="block-actions">${isHtml ? modeSwitchHtml(ui.mode) : ''}</div>
       </div>
       <div class="result-body">${renderResultBody(record, { full: ui.full })}</div>
     </section>
@@ -715,15 +958,13 @@ function renderRecordCard(record, { detail = false } = {}) {
     ${attachmentStripHtml(record)}
 
     ${record.error && record.result ? `<div class="error-block" style="margin-top:10px">${esc(record.error)}</div>` : ''}
-    ${note ? `<div class="muted-block">备注：${esc(note)}</div>` : ''}
-
-    ${metaBits.length ? `<footer class="record-meta"><span>${metaBits.join('</span><span>')}</span></footer>` : ''}
+    ${note ? `<div class="record-note"><span class="record-note-label">备注</span><span class="record-note-text">${linkify(note)}</span></div>` : ''}
 
     <footer class="record-actions">
       <div class="record-actions-main">
-        <button class="button compact" data-act="detail">查看详情</button>
-        <button class="ghost-button" data-act="copy">复制结果</button>
-        <button class="ghost-button" data-act="download">下载</button>
+        <button type="button" class="ghost-button strong" data-act="detail">查看详情</button>
+        <button type="button" class="ghost-button" data-act="copy">复制结果</button>
+        <button type="button" class="ghost-button" data-act="download">下载</button>
       </div>
       <details class="more-menu">
         <summary class="ghost-button">更多</summary>
@@ -952,7 +1193,7 @@ function renderCompare() {
       </div>
       <div class="compare-section">
         <h5>结果 · ${esc(typeLabel(record.result_type))}</h5>
-        <div class="result-body" style="padding:0">${renderResultBody(record, { mode: 'preview' })}</div>
+        <div class="result-body" style="padding:0">${renderResultBody(record, { mode: 'preview', full: recordUi(record.id).full })}</div>
         <div class="badge-row">
           <button class="ghost-button" data-act="copy">复制</button>
           <a class="ghost-button" href="/r/${encodeURIComponent(record.id)}" target="_blank" rel="noopener">打开结果页</a>
@@ -1524,20 +1765,177 @@ function confirmDialog({ title = '确认操作', message = '', confirmText = '�
   });
 }
 
-function openImageLightbox(url, name = '图片预览') {
-  frames.clear();
-  openModal({
-    title: name,
-    size: 'wide',
-    body: `<div class="lightbox"><img src="${esc(url)}" alt="${esc(name)}"></div>`,
-    footer: `<a class="ghost-button" href="${esc(url)}" target="_blank" rel="noopener">新窗口打开</a>
-             <a class="button primary" href="${esc(url)}" download>下载图片</a>`,
+/* ------------------------------------------------------------------ *
+ * 图片查看器：独立浮层，叠在弹窗之上，就地看大图，不跳新页面
+ * ------------------------------------------------------------------ */
+
+const viewer = { root: null, items: [], index: 0, zoomed: false, returnFocus: null };
+
+function ensureViewer() {
+  if (viewer.root) return viewer.root;
+  const root = document.createElement('div');
+  root.className = 'viewer';
+  root.hidden = true;
+  root.setAttribute('role', 'dialog');
+  root.setAttribute('aria-modal', 'true');
+  root.setAttribute('aria-label', '图片预览');
+  root.innerHTML = `
+    <div class="viewer-bar">
+      <div class="viewer-title"><strong data-viewer-name></strong><span data-viewer-meta></span></div>
+      <button type="button" class="viewer-tool" data-viewer="zoom"></button>
+      <a class="viewer-tool" data-viewer="download" download>${icon('download', 15)}<span>下载</span></a>
+      <button type="button" class="viewer-tool icon-only" data-viewer="close" aria-label="关闭（Esc）" title="关闭（Esc）">${icon('close', 17)}</button>
+    </div>
+    <div class="viewer-stage" data-viewer="stage">
+      <img class="viewer-img" data-viewer="img" alt="">
+    </div>
+    <button type="button" class="viewer-nav prev" data-viewer="prev" aria-label="上一张（←）">${icon('prev', 20)}</button>
+    <button type="button" class="viewer-nav next" data-viewer="next" aria-label="下一张（→）">${icon('next', 20)}</button>`;
+  document.body.appendChild(root);
+
+  const img = root.querySelector('[data-viewer="img"]');
+  img.addEventListener('load', () => {
+    root.classList.remove('is-loading');
+    updateViewerMeta();
   });
+  img.addEventListener('error', () => root.classList.remove('is-loading'));
+
+  root.addEventListener('click', (event) => {
+    const target = event.target.closest('[data-viewer]');
+    const role = target ? target.dataset.viewer : '';
+    if (role === 'close' || role === 'stage') closeImageViewer();
+    else if (role === 'prev') stepImageViewer(-1);
+    else if (role === 'next') stepImageViewer(1);
+    else if (role === 'zoom' || role === 'img') toggleViewerZoom(event);
+  });
+
+  // 捕获阶段先拦住按键：Esc 只关查看器，不连带关掉下面的弹窗
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if (root.hidden) return;
+      if (event.key === 'Escape') closeImageViewer();
+      else if (event.key === 'ArrowLeft') stepImageViewer(-1);
+      else if (event.key === 'ArrowRight') stepImageViewer(1);
+      else if (event.key === 'Tab') {
+        // 焦点留在查看器里
+        const focusable = $$('button:not([hidden]), a[href]', root).filter((node) => node.offsetParent !== null);
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          first.focus();
+        } else return;
+      } else return;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    true,
+  );
+
+  viewer.root = root;
+  return root;
 }
+
+function openImageViewer(items, index = 0) {
+  if (!items.length) return;
+  const root = ensureViewer();
+  viewer.items = items;
+  viewer.returnFocus = document.activeElement;
+  root.hidden = false;
+  document.body.classList.add('viewer-open');
+  showViewerImage(index);
+  root.querySelector('[data-viewer="close"]').focus({ preventScroll: true });
+}
+
+function closeImageViewer() {
+  if (!viewer.root || viewer.root.hidden) return;
+  viewer.root.hidden = true;
+  document.body.classList.remove('viewer-open');
+  viewer.root.querySelector('[data-viewer="img"]').removeAttribute('src');
+  if (viewer.returnFocus && document.contains(viewer.returnFocus)) viewer.returnFocus.focus({ preventScroll: true });
+}
+
+function stepImageViewer(delta) {
+  if (viewer.items.length < 2) return;
+  showViewerImage((viewer.index + delta + viewer.items.length) % viewer.items.length);
+}
+
+function showViewerImage(index) {
+  const root = viewer.root;
+  const item = viewer.items[index];
+  viewer.index = index;
+  viewer.zoomed = false;
+  root.classList.remove('zoomed');
+  root.classList.add('is-loading');
+  root.classList.toggle('single', viewer.items.length < 2);
+  const img = root.querySelector('[data-viewer="img"]');
+  img.alt = item.name;
+  img.src = item.url;
+  const download = root.querySelector('[data-viewer="download"]');
+  download.href = item.url;
+  download.setAttribute('download', item.name || '');
+  root.querySelector('[data-viewer-name]').textContent = item.name || '图片';
+  updateViewerMeta();
+}
+
+function updateViewerMeta() {
+  const root = viewer.root;
+  const img = root.querySelector('[data-viewer="img"]');
+  const bits = [];
+  if (img.naturalWidth) bits.push(`${img.naturalWidth} × ${img.naturalHeight}`);
+  if (viewer.items.length > 1) bits.push(`${viewer.index + 1} / ${viewer.items.length}`);
+  root.querySelector('[data-viewer-meta]').textContent = bits.join(' · ');
+  // 图比屏幕小时没有「原始尺寸」可切
+  const stage = root.querySelector('[data-viewer="stage"]');
+  const fits = img.naturalWidth <= stage.clientWidth - 48 && img.naturalHeight <= stage.clientHeight - 48;
+  root.classList.toggle('can-zoom', !!img.naturalWidth && !fits);
+  root.querySelector('[data-viewer="zoom"]').innerHTML = viewer.zoomed
+    ? `${icon('zoom-out', 15)}<span>适应屏幕</span>`
+    : `${icon('zoom-in', 15)}<span>原始尺寸</span>`;
+}
+
+function toggleViewerZoom(event) {
+  const root = viewer.root;
+  if (!root.classList.contains('can-zoom')) return;
+  const stage = root.querySelector('[data-viewer="stage"]');
+  const img = root.querySelector('[data-viewer="img"]');
+  // 以点击位置为中心放大，看哪儿点哪儿
+  const rect = img.getBoundingClientRect();
+  const fx = event.target === img ? (event.clientX - rect.left) / rect.width : 0.5;
+  const fy = event.target === img ? (event.clientY - rect.top) / rect.height : 0.5;
+  viewer.zoomed = !viewer.zoomed;
+  root.classList.toggle('zoomed', viewer.zoomed);
+  updateViewerMeta();
+  if (viewer.zoomed) {
+    stage.scrollLeft = img.offsetWidth * fx - stage.clientWidth / 2;
+    stage.scrollTop = img.offsetHeight * fy - stage.clientHeight / 2;
+  }
+}
+
+/** 同一张卡片 / 弹窗里的图片连成一组，可以左右翻 */
+function openLightboxFrom(link) {
+  const scope = link.closest('.record-card, .compare-col, .modal, .content') || document.body;
+  const seen = new Set();
+  const items = $$('[data-act="lightbox"]', scope)
+    .map((node) => ({ url: node.dataset.url || node.getAttribute('href'), name: node.dataset.name || '' }))
+    .filter((item) => item.url && !seen.has(item.url) && seen.add(item.url));
+  const url = link.dataset.url || link.getAttribute('href');
+  openImageViewer(items, Math.max(0, items.findIndex((item) => item.url === url)));
+}
+
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('[data-act="lightbox"]');
+  if (!link) return;
+  // ⌘/Ctrl/Shift/中键点击仍按浏览器习惯在新标签打开
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+  event.preventDefault();
+  openLightboxFrom(link);
+});
 
 function openDetail(record) {
   const ui = recordUi(record.id);
-  frames.clear();
   openModal({
     title: record.title || '(无标题记录)',
     size: 'wide',
@@ -1558,15 +1956,14 @@ function openDetail(record) {
       ${record.prompt ? `<section class="block"><div class="block-head"><span class="label">提示词</span><span class="spacer"></span><button class="ghost-button" data-act="copy-prompt">复制</button></div><div class="prompt-text">${esc(record.prompt)}</div></section>` : ''}
       <section class="block">
         <div class="block-head">
-          <span class="label">结果</span><span class="spacer"></span>
+          <span class="label">结果</span><span class="type-chip">${esc(typeLabel(record.result_type))}</span><span class="spacer"></span>
           <div class="block-actions">
-            <button class="ghost-button ${ui.mode !== 'source' ? 'active' : ''}" data-act="mode" data-mode="preview">预览</button>
-            <button class="ghost-button ${ui.mode === 'source' ? 'active' : ''}" data-act="mode" data-mode="source">源码</button>
+            ${record.result_type === 'html' && record.result ? modeSwitchHtml(ui.mode) : ''}
             <button class="ghost-button" data-act="copy">复制</button>
             <button class="ghost-button" data-act="download">下载</button>
           </div>
         </div>
-        <div class="result-body">${renderResultBody(record, { full: true })}</div>
+        <div class="result-body">${renderResultBody(record, { full: true, collapsible: false })}</div>
       </section>
       ${
         record.attachments && record.attachments.length
@@ -1575,7 +1972,7 @@ function openDetail(record) {
               .map(
                 (a) =>
                   a.kind === 'image'
-                    ? `<a class="image-item" href="${esc(a.url)}" target="_blank" rel="noopener"><img src="${esc(a.url)}" alt="${esc(a.name)}" loading="lazy"></a>`
+                    ? `<a class="image-item" href="${esc(a.url)}" data-act="lightbox" data-url="${esc(a.url)}" data-name="${esc(a.name)}" target="_blank" rel="noopener"><img src="${esc(a.url)}" alt="${esc(a.name)}" loading="lazy"></a>`
                     : `<a class="ghost-button" href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.name)}（${fmtBytes(a.size)}）</a>`,
               )
               .join('')}</div></div></section>`
@@ -1607,8 +2004,8 @@ function openDetail(record) {
           ui.mode = el.dataset.mode;
           openDetail(record);
         } else if (act === 'frame-reload') {
-          const frame = root.querySelector(`iframe[data-frame="${el.dataset.frame}"]`);
-          if (frame) frame.setAttribute('srcdoc', frames.get(el.dataset.frame) || '');
+          const frame = el.closest('.frame-wrap')?.querySelector('iframe[data-frame]');
+          if (frame) loadFrame(frame);
         }
       });
     },
@@ -1776,6 +2173,7 @@ function resultPreviewHtml() {
     return `<div class="preview-label">实时预览 · 保存后卡片里也是这样渲染</div>${renderHtmlFrame(null, value, {
       key: draftFrameKey,
       note: false,
+      collapsible: false,
     })}`;
   }
   if (looksMd) {
@@ -2636,12 +3034,6 @@ function bindEvents() {
       renderCurrentView();
       return;
     }
-    if (act === 'lightbox') {
-      event.preventDefault();
-      openImageLightbox(el.dataset.url, el.dataset.name || '图片预览');
-      return;
-    }
-
     if (!record) return;
 
     if (act === 'pick') {
@@ -2658,34 +3050,45 @@ function bindEvents() {
       renderCurrentView();
       return;
     }
+    // 下面三个只动卡片自己的那一块，不整页重绘，别的卡片里的 HTML 动画不会被重载
     if (act === 'toggle-prompt') {
       const ui = recordUi(record.id);
       ui.promptOpen = !ui.promptOpen;
-      renderCurrentView();
+      card.querySelector('.prompt-text')?.classList.toggle('clamp', !ui.promptOpen);
+      el.classList.toggle('open', ui.promptOpen);
+      el.setAttribute('aria-expanded', String(ui.promptOpen));
+      el.querySelector('span').textContent = ui.promptOpen ? '收起' : '展开';
       return;
     }
     if (act === 'mode') {
-      recordUi(record.id).mode = el.dataset.mode;
-      renderCurrentView();
+      const ui = recordUi(record.id);
+      if (ui.mode === el.dataset.mode) return;
+      ui.mode = el.dataset.mode;
+      $$('[data-act="mode"]', card).forEach((button) => {
+        const active = button.dataset.mode === ui.mode;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      const body = card.querySelector('.result-body');
+      if (body) {
+        body.innerHTML = renderResultBody(record, { full: ui.full });
+        hydrateFrames(body);
+      }
       return;
     }
     if (act === 'frame-full') {
       const ui = recordUi(record.id);
       ui.full = !ui.full;
-      renderCurrentView();
+      const wraps = $$('.frame-wrap.collapsible', card);
+      wraps.forEach((wrap) => setFrameExpanded(wrap, ui.full));
+      // 收起后如果框顶已经滚出屏幕，把它带回视野，不让人迷路
+      const top = wraps[0]?.getBoundingClientRect().top;
+      if (!ui.full && top !== undefined && top < 0) wraps[0].scrollIntoView({ block: 'start', behavior: 'smooth' });
       return;
     }
     if (act === 'frame-reload') {
-      const frame = el.closest('.frame-wrap')?.querySelector('iframe');
-      const key = frame?.dataset.frame;
-      if (frame && key) {
-        frame.setAttribute('srcdoc', frames.get(key) || '');
-        frame.removeAttribute('data-lazy');
-      }
-      return;
-    }
-    if (act === 'open') {
-      window.open(`/r/${encodeURIComponent(record.id)}`, '_blank');
+      const frame = el.closest('.frame-wrap')?.querySelector('iframe[data-frame]');
+      if (frame) loadFrame(frame);
       return;
     }
     if (act === 'copy') {
@@ -2818,6 +3221,7 @@ function applyTheme(theme) {
 function applyDensity(density) {
   state.density = density === 'compact' ? 'compact' : 'comfortable';
   document.body.classList.toggle('density-compact', state.density === 'compact');
+  refreshFrameCaps();
   $$('#densityToggle [data-density]').forEach((button) => {
     button.classList.toggle('active', button.dataset.density === state.density);
     button.setAttribute('aria-pressed', button.dataset.density === state.density ? 'true' : 'false');

@@ -199,7 +199,12 @@ test('上传文件当结果 → 保存 → 卡片里用沙箱 iframe 渲染', { 
   assert.ok(frame.getAttribute('srcdoc').includes('上传的标题'), 'iframe 里应当有上传的 HTML 内容');
   assert.match(frame.getAttribute('sandbox') || '', /allow-scripts/);
   dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: { __mtlHeight: 1, id: frame.dataset.frame, h: 2000 } }));
-  assert.ok(parseFloat(frame.style.height) <= 320, '未展开时 iframe 高度必须限制在预览高度内');
+  assert.equal(parseFloat(frame.style.height), 2000, 'iframe 必须按内容的自然高度排版，不能被压扁');
+  const wrap = frame.closest('.frame-wrap');
+  assert.ok(wrap.classList.contains('is-tall') && !wrap.classList.contains('expanded'), '超出预览上限时折叠态只裁切外框');
+  card.querySelector('.frame-more').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.ok(wrap.classList.contains('expanded'), '点「展开完整高度」应原地展开');
+  assert.equal(card.querySelector('iframe[data-frame]'), frame, '展开不应重建 iframe（否则动画会重播）');
   assert.ok(!card.querySelector('pre.text-block'), '不应该退化成 <pre> 文本块');
   assert.match(card.textContent, /思考\s*high/);
   assert.match(card.textContent, /Harness\s*codex/);
