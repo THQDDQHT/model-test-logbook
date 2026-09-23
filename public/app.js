@@ -2448,21 +2448,8 @@ function recordFormBody(record = {}) {
           <datalist id="harness-options">${harnessOptions}</datalist>
         </div>
       </div>
-      <div class="field-row">
-        <div class="field">
-          <label for="f-type">结果类型</label>
-          <select id="f-type">
-            <option value="">自动推断</option>
-            ${TYPES.map((t) => `<option value="${t.id}" ${record.result_type === t.id ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="field">
-          <label for="f-status">状态</label>
-          <select id="f-status">
-            ${STATUSES.map((s) => `<option value="${s.id}" ${(record.status || 'ok') === s.id ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}
-          </select>
-        </div>
-      </div>
+      <!-- 结果类型不再让人选：按内容 / 拖入的文件自动推断，编辑时沿用原类型 -->
+      <input type="hidden" id="f-type" value="${esc(record.result_type || '')}">
     </section>
     <section class="form-section">
       <div class="form-section-head">
@@ -2538,7 +2525,6 @@ function readForm() {
     harness: value('#f-harness'),
     result: value('#f-result'),
     result_type: value('#f-type'),
-    status: value('#f-status') || 'ok',
     tags: value('#f-tags'),
     batch: value('#f-batch'),
     note: value('#f-note'),

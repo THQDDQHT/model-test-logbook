@@ -742,10 +742,11 @@ select:focus {
   font-size: 11.5px;
 }
 
-.form-section .field + .field,
-.form-section .field + .field-row,
-.form-section .field-row + .field,
-.form-section .field-row + .field-row {
+/* 只作用于区块里上下排列的字段；同一行里的并列字段不能加，否则会上下错位 */
+.form-section > .field + .field,
+.form-section > .field + .field-row,
+.form-section > .field-row + .field,
+.form-section > .field-row + .field-row {
   margin-top: 12px;
 }
 
