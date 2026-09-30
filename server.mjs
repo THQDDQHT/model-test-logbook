@@ -44,7 +44,7 @@ const MAX_BODY = clampInt(flagValue('max-body-mb', process.env.MAX_BODY_MB || 32
 const SEED = !hasFlag('no-seed') && process.env.SEED !== '0';
 const QUIET = hasFlag('quiet');
 
-const VERSION = '1.2.2';
+const VERSION = '1.3.0';
 const STARTED_AT = nowMs();
 
 /* ------------------------------------------------------------------ *
