@@ -674,6 +674,16 @@ select:focus {
   color: var(--subtle);
 }
 
+/* 输入内容无法识别时：输入框描边与提示文字一起变成危险色 */
+.input.is-invalid,
+.input.is-invalid:focus {
+  border-color: var(--danger);
+}
+
+.field .hint.is-error {
+  color: var(--danger);
+}
+
 /* 标签内的补充说明（放在 label 里，避免撑高整列导致对不齐） */
 .field .label-note {
   margin-left: 4px;

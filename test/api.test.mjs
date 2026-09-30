@@ -482,3 +482,88 @@ test('坏请求体给出明确的 4xx 而不是 500', async () => {
   });
   assert.equal(huge.status, 413);
 });
+
+test('PATCH latency_ms：带单位字符串 / 清空 / 垃圾值 400', async () => {
+  const created = await createRecord({ model: 'm', prompt: 'p', result: 'r', latency_ms: 820 });
+  const patch = (body) =>
+    fetch(`${base}/api/records/${created.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+  let res = await patch({ latency_ms: '2m30s' });
+  let data = await parse(res);
+  assert.equal(res.status, 200);
+  assert.equal(data.record.latency_ms, 150000);
+
+  res = await patch({ latency_ms: 1234 });
+  assert.equal((await parse(res)).record.latency_ms, 1234, '纯数字仍按毫秒');
+
+  res = await patch({ latency_ms: '1:30' });
+  assert.equal((await parse(res)).record.latency_ms, 90000);
+
+  res = await patch({ latency_ms: 'abc' });
+  data = await parse(res);
+  assert.equal(res.status, 400);
+  assert.match(data.error, /latency_ms/);
+  const still = await (await fetch(`${base}/api/records/${created.id}`)).json();
+  assert.equal(still.record.latency_ms, 90000, '被拒绝的请求不能改动原值');
+
+  res = await patch({ latency_ms: -5 });
+  assert.equal(res.status, 400);
+
+  res = await patch({ latency_ms: null });
+  data = await parse(res);
+  assert.equal(res.status, 200);
+  assert.equal(data.record.latency_ms, null);
+
+  await patch({ latency_ms: 500 });
+  res = await patch({ latency_ms: '' });
+  assert.equal((await parse(res)).record.latency_ms, null, '空字符串也是清空');
+});
+
+test('PATCH 支持 tokens_in / tokens_out / total_tokens，只改 in / out 时重算 total', async () => {
+  const created = await createRecord({ model: 'm', prompt: 'p', result: 'r' });
+  const patch = async (body) => {
+    const res = await fetch(`${base}/api/records/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    assert.equal(res.status, 200);
+    return (await parse(res)).record;
+  };
+
+  let rec = await patch({ total_tokens: 100 });
+  assert.equal(rec.total_tokens, 100);
+  assert.equal(rec.tokens_in, null);
+
+  rec = await patch({ total_tokens: null });
+  assert.equal(rec.total_tokens, null, 'null 清空');
+
+  rec = await patch({ tokens_in: 10, tokens_out: 5 });
+  assert.equal(rec.tokens_in, 10);
+  assert.equal(rec.tokens_out, 5);
+  assert.equal(rec.total_tokens, 15, '没给 total 时用 in + out 重算');
+
+  rec = await patch({ tokens_out: 20 });
+  assert.equal(rec.total_tokens, 30, '只改 out 时和原来的 in 合并重算');
+
+  rec = await patch({ tokens_in: null });
+  assert.equal(rec.total_tokens, 20);
+
+  rec = await patch({ tokens_out: null });
+  assert.equal(rec.total_tokens, null, 'in / out 都空则 total 为 null');
+
+  rec = await patch({ tokens_in: 3, tokens_out: 4, total_tokens: 99 });
+  assert.equal(rec.total_tokens, 99, '显式给了 total 就以它为准');
+
+  rec = await patch({ total_tokens: '1234' });
+  assert.equal(rec.total_tokens, 1234);
+});
+
+test('登记时耗时支持秒别名与带单位字符串，分享页用人话显示耗时', async () => {
+  const a = await createRecord({ model: 'm', prompt: 'p', result: 'r', duration_s: 2.5 });
+  const saved = await (await fetch(`${base}/api/records/${a.id}`)).json();
+  assert.equal(saved.record.latency_ms, 2500);
+  const b = await createRecord({ model: 'm', prompt: 'p', result: 'r', latency: '2m5s' });
+  const page = await (await fetch(`${base}/r/${b.id}`)).text();
+  assert.match(page, /耗时 2 分 5 秒/);
+});

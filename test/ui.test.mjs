@@ -348,3 +348,204 @@ test('二进制文件（png）走同一条路：保存为文件型结果并就�
   assert.ok(fs.existsSync(diskFile), '图片应当真的上传到 data/files');
   dom.window.close();
 });
+
+/* ----------------------------- 耗时 / tokens / 记录时间 ----------------------------- */
+
+const click = (window, el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+
+function typeInto(window, el, text) {
+  el.value = text;
+  el.dispatchEvent(new window.Event('input', { bubbles: true }));
+}
+
+async function findByTitle(title) {
+  const data = await (await fetch(`${base}/api/records?q=${encodeURIComponent(title)}`)).json();
+  return data.items.find((r) => r.title === title) || null;
+}
+
+/** 轮询接口直到 predicate 成立（保存是异步的） */
+async function waitForRecord(title, predicate = () => true, what = '记录写入') {
+  const deadline = Date.now() + 6000;
+  for (;;) {
+    const rec = await findByTitle(title);
+    if (rec && predicate(rec)) return rec;
+    if (Date.now() > deadline) throw new Error(`等待「${what}」超时：${title}`);
+    await tick(50);
+  }
+}
+
+async function createViaApi(body) {
+  const res = await fetch(`${base}/api/records`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'm', prompt: 'p', result: 'r', ...body }),
+  });
+  assert.equal(res.status, 201);
+  return (await res.json()).id;
+}
+
+/** 打开页面并点开某条记录的「编辑」表单 */
+async function openEditFor(title) {
+  const dom = await openPage();
+  const { document, window } = dom.window;
+  const card = await waitFor(
+    () => Array.from(document.querySelectorAll('.record-card')).find((c) => c.textContent.includes(title)),
+    { what: `列表里出现「${title}」` },
+  );
+  click(window, card.querySelector('[data-act="edit"]'));
+  await waitFor(() => document.querySelector('#f-latency'), { what: '编辑弹窗' });
+  return dom;
+}
+
+test('新建记录：耗时填 1:30 → 实时回显 → 保存为 90000 ms', { skip: !JSDOM && '未安装 jsdom' }, async () => {
+  const dom = await openPage();
+  const { document, window } = dom.window;
+  await waitFor(() => document.querySelector('.empty-state, .record-card'), { what: '列表渲染' });
+
+  click(window, document.querySelector('#newRecordButton'));
+  const latency = await waitFor(() => document.querySelector('#f-latency'), { what: '新建记录弹窗' });
+  const hint = document.querySelector('#f-latency-hint');
+  assert.equal(latency.getAttribute('type'), 'text', '耗时输入框必须是文本框，才能写冒号和单位');
+  assert.match(hint.textContent, /纯数字按秒算/, '空的时候提示纯数字按秒');
+
+  typeInto(window, latency, '1:30');
+  assert.match(hint.textContent, /= 1 分 30 秒（90,000 ms）/);
+  assert.ok(!latency.classList.contains('is-invalid'));
+
+  typeInto(window, latency, '45');
+  assert.match(hint.textContent, /= 45 秒（45,000 ms）/, '表单里纯数字按秒解释');
+  typeInto(window, latency, '1:30');
+
+  document.querySelector('#f-title').value = 'UI 耗时 1:30';
+  document.querySelector('#f-model').value = 'gpt-5.1';
+  document.querySelector('#f-result').value = '结果';
+  click(window, document.querySelector('[data-act="save"]'));
+
+  const saved = await waitForRecord('UI 耗时 1:30');
+  assert.equal(saved.latency_ms, 90000);
+  dom.window.close();
+});
+
+test('新建记录：耗时写成看不懂的内容 → 报错提示、不保存、弹窗还在', { skip: !JSDOM && '未安装 jsdom' }, async () => {
+  const dom = await openPage();
+  const { document, window } = dom.window;
+  await waitFor(() => document.querySelector('.empty-state, .record-card'), { what: '列表渲染' });
+
+  click(window, document.querySelector('#newRecordButton'));
+  const latency = await waitFor(() => document.querySelector('#f-latency'), { what: '新建记录弹窗' });
+  document.querySelector('#f-title').value = 'UI 耗时 abc';
+  document.querySelector('#f-model').value = 'gpt-5.1';
+  document.querySelector('#f-result').value = '结果';
+  typeInto(window, latency, 'abc');
+  assert.match(document.querySelector('#f-latency-hint').textContent, /看不懂这个时长/);
+  assert.ok(latency.classList.contains('is-invalid'), '无法解析时输入框进入错误态');
+
+  const before = (await (await fetch(`${base}/api/records?limit=1`)).json()).total;
+  click(window, document.querySelector('[data-act="save"]'));
+  await tick(500);
+
+  const after = (await (await fetch(`${base}/api/records?limit=1`)).json()).total;
+  assert.equal(after, before, '不应产生新记录');
+  assert.equal(await findByTitle('UI 耗时 abc'), null);
+  assert.ok(document.querySelector('#f-latency'), '弹窗应当还在');
+  assert.equal(document.activeElement, latency, '应当聚焦到耗时输入框');
+  assert.match(document.querySelector('.toast.error, .toast')?.textContent || '', /耗时/);
+  assert.equal(document.querySelector('[data-act="save"]').disabled, false, '保存按钮要恢复可点');
+
+  // 改对之后能正常保存
+  typeInto(window, latency, '2m30s');
+  assert.ok(!latency.classList.contains('is-invalid'));
+  click(window, document.querySelector('[data-act="save"]'));
+  const saved = await waitForRecord('UI 耗时 abc');
+  assert.equal(saved.latency_ms, 150000);
+  dom.window.close();
+});
+
+test('编辑只改标题：耗时和记录时间（含秒 / 毫秒）原样保留', { skip: !JSDOM && '未安装 jsdom' }, async () => {
+  // 故意用带非零秒和毫秒的时间戳：曾经保存一次就会被抹成整分钟
+  const createdMs = Math.floor(Date.now() / 60000) * 60000 - 3600000 + 37 * 1000 + 456;
+  await createViaApi({ title: 'UI 编辑保留原值', created_at: createdMs, latency_ms: 1840, total_tokens: 100 });
+  const original = await findByTitle('UI 编辑保留原值');
+  assert.equal(original.created_at_ms, createdMs);
+
+  const dom = await openEditFor('UI 编辑保留原值');
+  const { document, window } = dom.window;
+  assert.equal(document.querySelector('#f-latency').value, '1.84s', '回填精确写法');
+  assert.match(document.querySelector('#f-latency-hint').textContent, /= 1\.84 秒（1,840 ms）/, '打开时先算一次回显');
+  assert.equal(document.querySelector('#f-tokens').value, '100');
+  assert.match(document.querySelector('#f-time').value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:37$/, '记录时间要能看到秒');
+  assert.equal(document.querySelector('#f-time').getAttribute('step'), '1');
+
+  document.querySelector('#f-title').value = 'UI 编辑保留原值（改）';
+  click(window, document.querySelector('[data-act="save"]'));
+  const saved = await waitForRecord('UI 编辑保留原值（改）');
+  assert.equal(saved.created_at_ms, createdMs, '没动过的记录时间不能被抹成整分钟');
+  assert.equal(saved.latency_ms, 1840);
+  assert.equal(saved.total_tokens, 100);
+  dom.window.close();
+});
+
+test('编辑：清空耗时和总 tokens 后保存，两者都变成 null', { skip: !JSDOM && '未安装 jsdom' }, async () => {
+  await createViaApi({ title: 'UI 编辑清空', latency_ms: 1840, total_tokens: 100 });
+  const dom = await openEditFor('UI 编辑清空');
+  const { document, window } = dom.window;
+
+  typeInto(window, document.querySelector('#f-latency'), '');
+  typeInto(window, document.querySelector('#f-tokens'), '');
+  assert.match(document.querySelector('#f-latency-hint').textContent, /纯数字按秒算/);
+  click(window, document.querySelector('[data-act="save"]'));
+
+  const saved = await waitForRecord('UI 编辑清空', (r) => r.latency_ms === null && r.total_tokens === null, '耗时与 tokens 被清空');
+  assert.equal(saved.latency_ms, null);
+  assert.equal(saved.total_tokens, null);
+  dom.window.close();
+});
+
+test('编辑：改耗时（纯数字按秒）和总 tokens 会真的写进去', { skip: !JSDOM && '未安装 jsdom' }, async () => {
+  await createViaApi({ title: 'UI 编辑改值', latency_ms: 1840, total_tokens: 100 });
+  const dom = await openEditFor('UI 编辑改值');
+  const { document, window } = dom.window;
+
+  typeInto(window, document.querySelector('#f-latency'), '45');
+  typeInto(window, document.querySelector('#f-tokens'), '250');
+  click(window, document.querySelector('[data-act="save"]'));
+
+  const saved = await waitForRecord('UI 编辑改值', (r) => r.latency_ms === 45000, '耗时被改成 45 秒');
+  assert.equal(saved.total_tokens, 250, '编辑「总 tokens」不能被静默丢弃');
+  dom.window.close();
+});
+
+test('前端 parseDuration / durationInputValue 往返不丢精度', { skip: !JSDOM && '未安装 jsdom' }, async () => {
+  const dom = await openPage();
+  const { parseDuration, durationInputValue, fmtDuration } = dom.window;
+  assert.equal(typeof parseDuration, 'function');
+  assert.equal(typeof durationInputValue, 'function');
+
+  for (const ms of [0, 1, 820, 999, 1000, 1001, 1840, 12300, 59999, 60000, 60001, 125000, 125250, 3599999, 3600000, 3723000, 3723004, 86400000, 90061001]) {
+    const text = durationInputValue(ms);
+    assert.equal(parseDuration(text, 's'), ms, `${ms} -> ${JSON.stringify(text)} 往返后不一致`);
+  }
+  assert.equal(durationInputValue(null), '');
+  assert.equal(durationInputValue(undefined), '');
+  assert.equal(durationInputValue(820), '820ms');
+  assert.equal(durationInputValue(1840), '1.84s');
+  assert.equal(durationInputValue(5000), '5s');
+  assert.equal(durationInputValue(125000), '2:05');
+  assert.equal(durationInputValue(125250), '2:05.25');
+  assert.equal(durationInputValue(3723000), '1:02:03');
+
+  // 前后端解析要一致
+  const { parseDurationMs, formatDuration } = await import('../lib/util.mjs');
+  const samples = ['1:30', '1:02:03', '2:05.250', '1h2m3s', '2分30秒', '1.5s', '820ms', '1m 30s', '1小时', '30分钟', '250毫秒', '45', '1.5', 'abc', '12x', '1h foo', '-5', '1:75', ''];
+  for (const text of samples) {
+    for (const unit of ['ms', 's']) {
+      const a = parseDurationMs(text, unit);
+      const b = parseDuration(text, unit);
+      assert.ok(Object.is(a, b), `${JSON.stringify(text)}(${unit})：后端 ${a}，前端 ${b}`);
+    }
+  }
+  for (const ms of [0, 820, 999, 1000, 1840, 12300, 59999, 60000, 125000, 3723000, 86400000 * 3 + 4 * 3600000, NaN, null]) {
+    assert.equal(fmtDuration(ms), formatDuration(ms), `fmtDuration(${ms})`);
+  }
+  dom.window.close();
+});

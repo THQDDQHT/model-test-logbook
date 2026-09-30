@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { openStore, recordLocalFileRefs, recordLocalFiles } from './lib/store.mjs';
 import { normalizeRecordPayload, normalizeBatchPayload, buildSeedRecords } from './lib/payload.mjs';
 import { saveFile, guessMime, resolveDataFile } from './lib/files.mjs';
-import { newId, nowMs, toIso, clampInt, asString, csvCell, formatLocal, localOffset, parseTimeToMs } from './lib/util.mjs';
+import { newId, nowMs, toIso, clampInt, asString, csvCell, formatLocal, localOffset, parseTimeToMs, toIntOrNull, parseDurationMs, formatDuration } from './lib/util.mjs';
 
 /* ------------------------------------------------------------------ *
  * 启动参数
@@ -419,7 +419,7 @@ route('GET', '/api/help', async (ctx) => {
       { method: 'POST', path: '/api/records', desc: '登记一条记录（也支持数组批量，最多 200 条）' },
       { method: 'GET', path: '/api/records', desc: '列表：q/model/tag/batch/type/status/reasoning_effort/harness/from/to/limit/offset/order' },
       { method: 'GET', path: '/api/records/:id', desc: '单条详情' },
-      { method: 'PATCH', path: '/api/records/:id', desc: '更新标题/标签/批次/meta 等' },
+      { method: 'PATCH', path: '/api/records/:id', desc: '更新标题/标签/批次/耗时/tokens/meta 等' },
       { method: 'DELETE', path: '/api/records/:id', desc: '删除一条' },
       { method: 'POST', path: '/api/records/bulk-delete', desc: '批量删除 {"ids":[...]}' },
       { method: 'POST', path: '/api/records/:id/attachments', desc: '追加附件（支持 base64 / data URL / 远程 URL）' },
@@ -436,6 +436,7 @@ route('GET', '/api/help', async (ctx) => {
       '未识别的字段不会丢失，会原样保存在 meta._extra 里',
       'reasoning_effort 和 harness 只使用标准字段名，不提供别名兼容',
       'result_type 不传会自动推断（html / json / markdown / text / image）',
+      'latency_ms 纯数字按毫秒，也接受带单位的字符串，如 "1.5s"、"2m30s"、"1:30"；latency_s / duration_s 等秒别名的纯数字按秒（同时给出时毫秒别名优先）',
       'created_at 支持 ISO 字符串、秒级/毫秒级时间戳；不传则用服务器当前时间',
       '带 idempotency_key（或 request_id / trace_id）重复提交时不会新增，只返回已有记录',
       '结果里的 HTML 在界面上以沙箱 iframe 渲染，不会影响主页面',
@@ -457,6 +458,7 @@ const FIELD_ALIASES_DOC = {
   status: ['status', 'state', 'ok', 'success'],
   error: ['error', 'error_message', 'err', 'failure', 'exception'],
   latency_ms: ['latency_ms', 'latency', 'duration', 'duration_ms', 'elapsed_ms'],
+  latency_s: ['latency_s', 'duration_s', 'elapsed_s', 'duration_seconds', 'elapsed_seconds', 'latency_seconds', 'took_s'],
   tokens_in: ['tokens_in', 'prompt_tokens', 'input_tokens'],
   tokens_out: ['tokens_out', 'completion_tokens', 'output_tokens'],
   cost: ['cost', 'price', 'usd', 'fee'],
@@ -587,7 +589,21 @@ route('PATCH', '/api/records/:id', async (ctx) => {
   if (body.prompt !== undefined) patch.prompt = asString(body.prompt);
   if (body.result !== undefined || body.output !== undefined) patch.result = asString(body.result ?? body.output);
   if (body.error !== undefined) patch.error = asString(body.error);
-  if (body.latency_ms !== undefined) patch.latency_ms = body.latency_ms === null ? null : Number(body.latency_ms);
+  if (body.latency_ms !== undefined) {
+    // 空 -> 清空；纯数字按毫秒，带单位的字符串（1.5s、2m30s、1:30）也认
+    const ms = parseDurationMs(body.latency_ms, 'ms');
+    if (Number.isNaN(ms)) throw new HttpError(400, `latency_ms 无法解析：${asString(body.latency_ms).slice(0, 40)}（可写毫秒数，或 "1.5s"、"2m30s"、"1:30"）`);
+    patch.latency_ms = ms;
+  }
+  for (const key of ['tokens_in', 'tokens_out', 'total_tokens']) {
+    if (body[key] !== undefined) patch[key] = toIntOrNull(body[key]);
+  }
+  // 只改了输入 / 输出、没给总数时，用合并后的两者重算总数
+  if ((patch.tokens_in !== undefined || patch.tokens_out !== undefined) && body.total_tokens === undefined) {
+    const tin = patch.tokens_in !== undefined ? patch.tokens_in : existing.tokens_in;
+    const tout = patch.tokens_out !== undefined ? patch.tokens_out : existing.tokens_out;
+    patch.total_tokens = tin === null && tout === null ? null : (tin || 0) + (tout || 0);
+  }
   if (body.cost !== undefined) patch.cost = body.cost === null ? null : Number(body.cost);
   if (body.currency !== undefined) patch.currency = asString(body.currency);
   if (body.created_at !== undefined) {
@@ -905,7 +921,7 @@ route('GET', '/r/:id', async (ctx) => {
     record.harness ? `Harness ${escapeHtmlText(record.harness)}` : '',
     escapeHtmlText(record.title || '(无标题)'),
     `记录时间 ${record.created_at_local || ''}`,
-    record.latency_ms ? `耗时 ${record.latency_ms} ms` : '',
+    record.latency_ms ? `耗时 ${formatDuration(record.latency_ms)}` : '',
   ]
     .filter(Boolean)
     .join(' · ');

@@ -253,7 +253,7 @@ curl -X POST http://127.0.0.1:8788/api/records \
 | `status` | `ok` / `error` / `pending` / `running` / `skipped`；传 `ok:false` 或给了 `error` 也判定为失败 |
 | `error` | 失败信息 |
 | `provider` | 渠道 / 供应商 |
-| `latency_ms` | 耗时（毫秒） |
+| `latency_ms` | 耗时。纯数字按毫秒；也可以传带单位的字符串，如 `"1.5s"`、`"2m30s"`、`"1h2m3s"`、`"2分30秒"`、`"820ms"`、`"1:30"`（`m:ss` / `h:mm:ss`）；无法解析时存空并在响应的 `warnings` 里提示。网页表单里的纯数字按**秒**算（要毫秒请写 `820ms`） |
 | `tokens_in` / `tokens_out` / `total_tokens` | token 用量（只给前两个会自动求和） |
 | `cost` / `currency` | 成本与币种（默认 USD） |
 | `created_at` | 记录时间：ISO 字符串（`2026-09-17T11:48:12+08:00`）、`2026-09-17 11:48:12`、秒级或毫秒级时间戳都行；不传用服务器当前时间 |
@@ -279,6 +279,7 @@ curl -X POST http://127.0.0.1:8788/api/records \
 | `status` | `state` `ok` `success` `passed` |
 | `error` | `error_message` `err` `failure` `exception` |
 | `latency_ms` | `latency` `duration` `duration_ms` `elapsed_ms` `took_ms` |
+| `latency_ms`（秒） | `latency_s` `duration_s` `elapsed_s` `duration_seconds` `elapsed_seconds` `latency_seconds` `took_s`：纯数字按**秒**算，带单位的字符串照常解析；和毫秒别名同时给出时以毫秒为准 |
 | `tokens_in` | `prompt_tokens` `input_tokens` |
 | `tokens_out` | `completion_tokens` `output_tokens` |
 | `cost` | `price` `usd` `fee` |
@@ -294,7 +295,7 @@ curl -X POST http://127.0.0.1:8788/api/records \
 | POST | `/api/records` | 登记记录（对象 / 数组 / `{"records":[...]}`） |
 | GET | `/api/records` | 列表，参数：`q` `model` `tag` `batch_id`（严格批次 id）`batch`（批次 id 或批次名都行）`type` `status` `reasoning_effort` `harness` `source` `from` `to` `limit`(默认 50，≤500) `offset` `order=asc\|desc` `id` |
 | GET | `/api/records/:id` | 单条详情 |
-| PATCH | `/api/records/:id` | 更新 `title` `tags` `model` `provider` `reasoning_effort` `harness` `status` `result_type` `prompt` `result` `error` `latency_ms` `cost` `created_at` `meta` `note` `batch` `attachments` |
+| PATCH | `/api/records/:id` | 更新 `title` `tags` `model` `provider` `reasoning_effort` `harness` `status` `result_type` `prompt` `result` `error` `latency_ms`（同样接受带单位的字符串，`null` 清空）`tokens_in` `tokens_out` `total_tokens`（`null` 清空；只改前两个时自动重算总数）`cost` `created_at` `meta` `note` `batch` `attachments` |
 | DELETE | `/api/records/:id` | 删除（连同附件文件） |
 | POST | `/api/records/bulk-delete` | 批量删除 `{"ids":["rec_..."]}` |
 | POST | `/api/records/:id/attachments` | 追加附件 |

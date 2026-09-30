@@ -232,3 +232,44 @@ test('normalizeBatchPayload 的必填校验与别名', () => {
   assert.equal(normalizeBatchPayload({ title: '批次B' }).name, '批次B');
   assert.equal(normalizeBatchPayload({ name: '批次C', note: '备注' }).note, '备注');
 });
+
+test('耗时：带单位的字符串（1.5s / 2m30s / 1:30）会解析成毫秒，纯数字保持按毫秒', () => {
+  assert.equal(norm({ latency: '1.5s' }).record.latency_ms, 1500);
+  assert.equal(norm({ latency_ms: '2m30s' }).record.latency_ms, 150000);
+  assert.equal(norm({ duration: '1:30' }).record.latency_ms, 90000);
+  assert.equal(norm({ latency_ms: 820 }).record.latency_ms, 820);
+  assert.equal(norm({ latency_ms: '820' }).record.latency_ms, 820);
+  assert.equal(norm({ duration: 1200 }).record.latency_ms, 1200);
+  assert.equal(norm({ model: 'm' }).record.latency_ms, null);
+  assert.deepEqual(norm({ prompt: 'p', latency: '1.5s' }).warnings, []);
+});
+
+test('耗时：秒别名的纯数字按秒，带单位的字符串照常解析', () => {
+  assert.equal(norm({ duration_s: 2.5 }).record.latency_ms, 2500);
+  for (const key of ['latency_s', 'latencyS', 'duration_s', 'durationS', 'elapsed_s', 'elapsedS', 'duration_seconds', 'elapsed_seconds', 'latency_seconds', 'took_s']) {
+    assert.equal(norm({ [key]: 3 }).record.latency_ms, 3000, key);
+  }
+  assert.equal(norm({ took_s: '2m30s' }).record.latency_ms, 150000);
+  assert.equal(norm({ elapsed_seconds: '820ms' }).record.latency_ms, 820);
+});
+
+test('耗时：毫秒别名和秒别名同时给出时，毫秒别名优先', () => {
+  assert.equal(norm({ duration_s: 9, latency_ms: 1200 }).record.latency_ms, 1200);
+  assert.equal(norm({ latency_ms: 1200, took_s: 9 }).record.latency_ms, 1200);
+  assert.equal(norm({ duration: 500, duration_seconds: 9 }).record.latency_ms, 500);
+});
+
+test('耗时：无法解析时存 null 并给出 warning', () => {
+  const a = norm({ model: 'm', prompt: 'p', latency_ms: '大概一会儿' });
+  assert.equal(a.record.latency_ms, null);
+  assert.ok(a.warnings.some((w) => w.includes('耗时') && w.includes('大概一会儿')), a.warnings.join('|'));
+  const b = norm({ model: 'm', prompt: 'p', duration_s: '-3' });
+  assert.equal(b.record.latency_ms, null);
+  assert.ok(b.warnings.some((w) => w.includes('耗时')));
+});
+
+test('耗时：秒别名是已知字段，不会被塞进 meta._extra', () => {
+  const { record } = norm({ model: 'm', prompt: 'p', duration_s: 2.5, took_s: 1, latencyS: 1, foo: 'bar' });
+  assert.deepEqual(record.meta._extra, { foo: 'bar' });
+  assert.equal(norm({ model: 'm', prompt: 'p', duration_s: 2.5 }).record.meta._extra, undefined);
+});

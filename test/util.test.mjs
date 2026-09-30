@@ -7,6 +7,8 @@ import {
   formatLocal,
   toIso,
   parseTimeToMs,
+  parseDurationMs,
+  formatDuration,
   asString,
   firstDefined,
   firstString,
@@ -188,4 +190,111 @@ test('deriveTitle 取提示词首个非空行并去掉前缀', () => {
   assert.equal(deriveTitle('', '<div>结果</div>'), '<div>结果</div>');
   assert.equal(deriveTitle('', ''), '');
   assert.equal(deriveTitle('x'.repeat(200), '').length, 81);
+});
+
+/* ----------------------------- 时长 ----------------------------- */
+
+test('parseDurationMs：空值返回 null', () => {
+  for (const v of [null, undefined, '', '   ', '\t\n']) assert.equal(parseDurationMs(v), null, JSON.stringify(v));
+  assert.equal(parseDurationMs('', 's'), null);
+});
+
+test('parseDurationMs：纯数字按 defaultUnit 解释', () => {
+  assert.equal(parseDurationMs(820), 820);
+  assert.equal(parseDurationMs('820'), 820);
+  assert.equal(parseDurationMs('820', 'ms'), 820);
+  assert.equal(parseDurationMs(1.5, 's'), 1500);
+  assert.equal(parseDurationMs('1.5', 's'), 1500);
+  assert.equal(parseDurationMs('90', 's'), 90000);
+  assert.equal(parseDurationMs(0, 's'), 0);
+  assert.equal(parseDurationMs('  45  ', 's'), 45000);
+  assert.equal(parseDurationMs('1.6'), 2, '毫秒小数要四舍五入');
+});
+
+test('parseDurationMs：冒号式 m:ss / h:mm:ss，末段可带小数，兼容全角冒号', () => {
+  assert.equal(parseDurationMs('1:30'), 90000);
+  assert.equal(parseDurationMs('01:30'), 90000);
+  assert.equal(parseDurationMs('1:02:03'), 3723000);
+  assert.equal(parseDurationMs('2:05.250'), 125250);
+  assert.equal(parseDurationMs('1：30'), 90000);
+  assert.equal(parseDurationMs('1:30', 's'), 90000, '冒号式与 defaultUnit 无关');
+  assert.equal(parseDurationMs('90:00'), 5400000, 'm:ss 的分钟不限 60');
+  assert.ok(Number.isNaN(parseDurationMs('1:75')), '秒必须小于 60');
+  assert.ok(Number.isNaN(parseDurationMs('1:75:00')), 'h:mm:ss 的分必须小于 60');
+  assert.ok(Number.isNaN(parseDurationMs('1:')));
+  assert.ok(Number.isNaN(parseDurationMs(':30')));
+});
+
+test('parseDurationMs：单位式（英文 / 中文 / 组合 / 空格）', () => {
+  assert.equal(parseDurationMs('1h2m3s'), 3723000);
+  assert.equal(parseDurationMs('2分30秒'), 150000);
+  assert.equal(parseDurationMs('1.5s'), 1500);
+  assert.equal(parseDurationMs('820ms'), 820);
+  assert.equal(parseDurationMs('1m 30s'), 90000);
+  assert.equal(parseDurationMs('1小时'), 3600000);
+  assert.equal(parseDurationMs('1小时2分3秒'), 3723000);
+  assert.equal(parseDurationMs('1时30分'), 5400000);
+  assert.equal(parseDurationMs('30分钟'), 1800000);
+  assert.equal(parseDurationMs('250毫秒'), 250);
+  assert.equal(parseDurationMs('2 hours 5 mins 3 secs'), 7503000);
+  assert.equal(parseDurationMs('1hr'), 3600000);
+  assert.equal(parseDurationMs('1 hrs'), 3600000);
+  assert.equal(parseDurationMs('2 minutes'), 120000);
+  assert.equal(parseDurationMs('1 second'), 1000);
+  assert.equal(parseDurationMs('5msec'), 5);
+  assert.equal(parseDurationMs('1.5h'), 5400000);
+  assert.equal(parseDurationMs('1H30M'), 5400000, '大小写不敏感');
+  assert.equal(parseDurationMs('1s500ms'), 1500);
+  assert.equal(parseDurationMs('45s', 's'), 45000, '带单位时 defaultUnit 不起作用');
+  assert.equal(parseDurationMs('45s', 'ms'), 45000);
+});
+
+test('parseDurationMs：ms / m、毫秒 / 秒、分钟 / 分、小时 / 时 的匹配优先级', () => {
+  assert.equal(parseDurationMs('820ms'), 820, '820ms 不能被当成 820 分钟');
+  assert.equal(parseDurationMs('1m'), 60000);
+  assert.equal(parseDurationMs('1m500ms'), 60500);
+  assert.equal(parseDurationMs('3毫秒'), 3, '毫秒不能被拆成「毫」+「秒」');
+  assert.equal(parseDurationMs('3秒'), 3000);
+  assert.equal(parseDurationMs('2分钟'), 120000, '分钟不能被拆成「分」+ 垃圾「钟」');
+  assert.equal(parseDurationMs('2分'), 120000);
+  assert.equal(parseDurationMs('2小时'), 7200000, '小时不能被拆成「小」+「时」');
+  assert.equal(parseDurationMs('2时'), 7200000);
+});
+
+test('parseDurationMs：垃圾 / 负数 / 非有限数返回 NaN', () => {
+  for (const v of ['abc', '12x', '1h foo', 'foo 1h', '1h2', '1m30', '-5', '-1s', '1..5', '1.5.5', '1,5s', 's', 'ms', '1 2', 'NaN', 'Infinity', '1e3', '0x10']) {
+    assert.ok(Number.isNaN(parseDurationMs(v)), `${JSON.stringify(v)} 应为 NaN，实际 ${parseDurationMs(v)}`);
+  }
+  for (const v of [-1, NaN, Infinity, -Infinity, true, {}, [], [1]]) {
+    assert.ok(Number.isNaN(parseDurationMs(v, 's')), `${JSON.stringify(v)} 应为 NaN`);
+  }
+  assert.ok(Number.isNaN(parseDurationMs('1e400')));
+});
+
+test('formatDuration：毫秒 / 秒 / 分秒 / 时 / 天 各区间与边界', () => {
+  assert.equal(formatDuration(0), '0 ms');
+  assert.equal(formatDuration(820), '820 ms');
+  assert.equal(formatDuration(999), '999 ms');
+  assert.equal(formatDuration(1000), '1 秒');
+  assert.equal(formatDuration(1840), '1.84 秒');
+  assert.equal(formatDuration(1849), '1.85 秒', '最多两位小数，四舍五入');
+  assert.equal(formatDuration(5000), '5 秒');
+  assert.equal(formatDuration(12300), '12.3 秒');
+  assert.equal(formatDuration(59990), '59.99 秒');
+  assert.equal(formatDuration(59999), '1 分', '舍入后满 60 秒要进位，不显示「60 秒」');
+  assert.equal(formatDuration(60000), '1 分');
+  assert.equal(formatDuration(60499), '1 分', '>=60000 的秒四舍五入到整秒');
+  assert.equal(formatDuration(60500), '1 分 1 秒');
+  assert.equal(formatDuration(125000), '2 分 5 秒');
+  assert.equal(formatDuration(120000), '2 分');
+  assert.equal(formatDuration(3600000), '1 小时');
+  assert.equal(formatDuration(3723000), '1 小时 2 分 3 秒');
+  assert.equal(formatDuration(3720000), '1 小时 2 分');
+  assert.equal(formatDuration(86400000), '1 天');
+  assert.equal(formatDuration(3 * 86400000 + 4 * 3600000), '3 天 4 小时');
+  assert.equal(formatDuration(86400000 + 5000), '1 天 5 秒');
+});
+
+test('formatDuration：非有限数显示 —', () => {
+  for (const v of [NaN, Infinity, undefined, null, '', 'abc']) assert.equal(formatDuration(v), '—', String(v));
 });

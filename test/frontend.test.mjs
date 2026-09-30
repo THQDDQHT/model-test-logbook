@@ -28,6 +28,7 @@ const DYNAMIC_IDS = new Set([
   'f-tags',
   'f-batch',
   'f-latency',
+  'f-latency-hint',
   'f-tokens',
   'f-time',
   'f-note',

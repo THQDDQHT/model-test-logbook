@@ -161,6 +161,88 @@ function fmtNum(n) {
   return v.toLocaleString('zh-CN');
 }
 
+/** 单位式时长里的「数字 + 单位」片段；单位按长的在前排，避免 ms 被当成 m、毫秒被当成秒（与后端 lib/util.mjs 保持一致） */
+const DURATION_SEGMENT = /\s*(\d+(?:\.\d+)?|\.\d+)\s*(小时|分钟|毫秒|hours?|hrs?|minutes?|mins?|msec|ms|seconds?|secs?|h|m|s|时|分|秒)/y;
+const DURATION_UNIT_MS = { h: 3600000, m: 60000, s: 1000, ms: 1 };
+
+function durationUnitKey(unit) {
+  if (unit === '小时' || unit === '时' || /^h/.test(unit)) return 'h';
+  if (unit === '毫秒' || unit === 'ms' || unit === 'msec') return 'ms';
+  if (unit === '分钟' || unit === '分' || /^m/.test(unit)) return 'm';
+  return 's';
+}
+
+/**
+ * 把各种写法的时长解析成整数毫秒：纯数字（按 defaultUnit，'ms' 或 's'）、1:30 / 1:02:03、1h2m3s / 2分30秒 / 820ms。
+ * 返回：空 -> null；无法解析 -> NaN。
+ */
+function parseDuration(text, defaultUnit = 'ms') {
+  if (text === null || text === undefined) return null;
+  const unitMs = defaultUnit === 's' ? 1000 : 1;
+  const finish = (ms) => (Number.isFinite(ms) && ms >= 0 && ms <= Number.MAX_SAFE_INTEGER ? Math.round(ms) : NaN);
+  if (typeof text === 'number') return finish(text * unitMs);
+  if (typeof text !== 'string') return NaN;
+  const raw = text.trim().toLowerCase().replace(/：/g, ':');
+  if (!raw) return null;
+  if (/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(raw)) return finish(Number(raw) * unitMs);
+  // 冒号式：m:ss / h:mm:ss，末段可带小数；秒必须小于 60，h:mm:ss 里的分也必须小于 60
+  const colon = /^(\d+):(\d+)(?::(\d+(?:\.\d+)?))?$/.exec(raw) || /^(\d+):(\d+(?:\.\d+)?)$/.exec(raw);
+  if (colon) {
+    const hasHour = colon[3] !== undefined;
+    const [h, m, s] = hasHour ? [Number(colon[1]), Number(colon[2]), Number(colon[3])] : [0, Number(colon[1]), Number(colon[2])];
+    if (s >= 60 || (hasHour && m >= 60)) return NaN;
+    return finish(((h * 60 + m) * 60 + s) * 1000);
+  }
+  // 单位式：一个或多个「数字 + 单位」，必须整串吃完
+  let total = 0;
+  let pos = 0;
+  while (pos < raw.length) {
+    DURATION_SEGMENT.lastIndex = pos;
+    const m = DURATION_SEGMENT.exec(raw);
+    if (!m) return NaN;
+    total += Number(m[1]) * DURATION_UNIT_MS[durationUnitKey(m[2])];
+    pos = DURATION_SEGMENT.lastIndex;
+  }
+  return finish(total);
+}
+
+/** 给人看的时长展示（有舍入）：820 ms / 1.84 秒 / 2 分 5 秒 / 3 天 4 小时 */
+function fmtDuration(ms) {
+  const n = Number(ms);
+  if (ms === null || ms === undefined || ms === '' || !Number.isFinite(n)) return '—';
+  if (n < 1000) return `${Math.round(n)} ms`;
+  // 舍入后满 60 秒的（如 59999 ms）进位成「1 分」，不显示「60 秒」
+  const sec = Number((n / 1000).toFixed(2));
+  if (sec < 60) return `${sec} 秒`;
+  const total = Math.round(n / 1000);
+  const parts = [
+    [Math.floor(total / 86400), '天'],
+    [Math.floor((total % 86400) / 3600), '小时'],
+    [Math.floor((total % 3600) / 60), '分'],
+    [total % 60, '秒'],
+  ];
+  return parts
+    .filter(([v]) => v > 0)
+    .map(([v, u]) => `${v} ${u}`)
+    .join(' ');
+}
+
+/** 表单回填用的精确写法：parseDuration(durationInputValue(ms), 's') === ms（不丢毫秒） */
+function durationInputValue(ms) {
+  if (ms === null || ms === undefined || ms === '') return '';
+  const n = Math.round(Number(ms));
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1000) return `${n}ms`;
+  const frac = (rest) => (rest ? `.${String(rest).padStart(3, '0').replace(/0+$/, '')}` : '');
+  const restMs = n % 1000;
+  const totalSec = Math.floor(n / 1000);
+  if (n < 60000) return `${totalSec}${frac(restMs)}s`;
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}${frac(restMs)}` : `${m}:${pad(s)}${frac(restMs)}`;
+}
+
 function rangeFrom(range) {
   if (range === 'today') {
     const d = new Date();
@@ -895,7 +977,7 @@ function renderRecordCard(record, { detail = false } = {}) {
   const promptOpen = ui.promptOpen || detail;
 
   const subBits = [`<span title="记录时间 ${esc(fmtAbs(record.created_at_ms))}">${esc(fmtAbs(record.created_at_ms))}</span>`, `<span>${esc(fmtRel(record.created_at_ms))}</span>`];
-  if (record.latency_ms !== null && record.latency_ms !== undefined) subBits.push(`<span>耗时 ${fmtNum(record.latency_ms)} ms</span>`);
+  if (record.latency_ms !== null && record.latency_ms !== undefined) subBits.push(`<span title="${fmtNum(record.latency_ms)} ms">耗时 ${fmtDuration(record.latency_ms)}</span>`);
   if (record.total_tokens) subBits.push(`<span>${fmtNum(record.total_tokens)} tokens</span>`);
   if (record.cost !== null && record.cost !== undefined && record.cost !== '') subBits.push(`<span>成本 ${esc(record.cost)} ${esc(record.currency || '')}</span>`);
   if (record.provider) subBits.push(`<span>渠道 ${esc(record.provider)}</span>`);
@@ -1180,7 +1262,7 @@ function renderCompare() {
         <h5>记录信息</h5>
         <div class="record-sub">
           <span>${esc(fmtAbs(record.created_at_ms))}</span>
-          ${record.latency_ms ? `<span class="dot"></span><span>${fmtNum(record.latency_ms)} ms</span>` : ''}
+          ${record.latency_ms ? `<span class="dot"></span><span title="${fmtNum(record.latency_ms)} ms">${fmtDuration(record.latency_ms)}</span>` : ''}
           ${record.total_tokens ? `<span class="dot"></span><span>${fmtNum(record.total_tokens)} tokens</span>` : ''}
           ${record.reasoning_effort ? `<span class="dot"></span><span>思考 ${esc(record.reasoning_effort)}</span>` : ''}
           ${record.harness ? `<span class="dot"></span><span>Harness ${esc(record.harness)}</span>` : ''}
@@ -1317,7 +1399,7 @@ function renderStats() {
   const avgLatency = (() => {
     const items = state.records.filter((r) => Number.isFinite(r.latency_ms));
     if (!items.length) return '—';
-    return `${Math.round(items.reduce((sum, r) => sum + r.latency_ms, 0) / items.length)} ms`;
+    return fmtDuration(Math.round(items.reduce((sum, r) => sum + r.latency_ms, 0) / items.length));
   })();
 
   const errors = stats.statuses.find((s) => s.status === 'error');
@@ -1344,7 +1426,7 @@ function renderStats() {
       <div class="stat-card"><span>失败率</span><strong>${esc(errorRate)}</strong><em>${fmtNum(errors ? errors.count : 0)} 条标记为失败</em></div>
       <div class="stat-card"><span>当前页平均耗时</span><strong>${esc(avgLatency)}</strong><em>基于已加载的 ${state.records.length} 条</em></div>
       <div class="stat-card"><span>数据占用</span><strong>${fmtBytes(stats.db_bytes + stats.file_bytes)}</strong><em>库 ${fmtBytes(stats.db_bytes)} · 附件 ${fmtBytes(stats.file_bytes)}</em></div>
-      <div class="stat-card"><span>服务运行</span><strong>${fmtNum(Math.round(stats.uptime_seconds / 60))} 分</strong><em>版本已就绪</em></div>
+      <div class="stat-card"><span>服务运行</span><strong>${fmtDuration(stats.uptime_seconds * 1000)}</strong><em>版本已就绪</em></div>
     </section>
 
     <section class="panel">
@@ -1389,7 +1471,7 @@ function renderDocs() {
     ['POST', '/api/records', '登记一条记录（支持数组批量，单次最多 200 条）'],
     ['GET', '/api/records', '列表：q / model / tag / batch / type / status / reasoning_effort / harness / from / to / limit / offset / order'],
     ['GET', '/api/records/:id', '单条详情'],
-    ['PATCH', '/api/records/:id', '更新标题 / 标签 / 批次 / meta 等'],
+    ['PATCH', '/api/records/:id', '更新标题 / 标签 / 批次 / 耗时 / tokens / meta 等'],
     ['DELETE', '/api/records/:id', '删除一条'],
     ['POST', '/api/records/bulk-delete', '批量删除 {"ids":["rec_..."]}'],
     ['POST', '/api/records/:id/attachments', '追加附件（base64 / data URL / 远程 URL）'],
@@ -1424,7 +1506,8 @@ function renderDocs() {
     ['tags', 'tags / tag / labels / keywords（数组或逗号分隔字符串）'],
     ['batch', 'batch / batch_name / group / session / run_id / test_id（同名自动建批次）'],
     ['status', 'status / state / ok / success（"error"/false 会标记为失败）'],
-    ['latency_ms', 'latency_ms / latency / duration / duration_ms / elapsed_ms'],
+    ['latency_ms', 'latency_ms / latency / duration / duration_ms / elapsed_ms（纯数字按毫秒；也可传带单位的字符串，如 "1.5s"、"2m30s"、"1:30"）'],
+    ['latency_s', 'latency_s / duration_s / elapsed_s / duration_seconds / elapsed_seconds / latency_seconds / took_s（纯数字按秒；毫秒别名同时给出时以毫秒为准）'],
     ['usage', 'tokens_in / prompt_tokens、tokens_out / completion_tokens、cost / price'],
     ['created_at', 'created_at / time / timestamp / ts / date（ISO 字符串或秒/毫秒时间戳）'],
     ['idempotency_key', 'idempotency_key / request_id / trace_id（重复提交只返回已有记录）'],
@@ -1553,6 +1636,9 @@ curl "${base}/api/records?reasoning_effort=high&harness=codex"`,
         <table class="kv-table"><tbody>${aliases}</tbody></table>
         <div class="doc-note" style="margin-top:10px">
           无法识别的字段不会丢，会原样保存到 <code>meta._extra</code>；响应里可以随时取回。
+        </div>
+        <div class="doc-note" style="margin-top:10px">
+          耗时可传带单位的字符串，如 <code>"1.5s"</code>、<code>"2m30s"</code>、<code>"1:30"</code>；<code>latency_ms</code> 的纯数字按毫秒，<code>latency_s</code> 等秒别名的纯数字按秒。
         </div>
       </section>
 
@@ -1950,7 +2036,7 @@ function openDetail(record) {
       </div>
       <div class="record-sub" style="margin-bottom:12px">
         <span>记录时间 ${esc(fmtAbs(record.created_at_ms))}</span><span class="dot"></span><span>${esc(fmtRel(record.created_at_ms))}</span>
-        ${record.latency_ms ? `<span class="dot"></span><span>耗时 ${fmtNum(record.latency_ms)} ms</span>` : ''}
+        ${record.latency_ms ? `<span class="dot"></span><span title="${fmtNum(record.latency_ms)} ms">耗时 ${fmtDuration(record.latency_ms)}</span>` : ''}
         ${record.total_tokens ? `<span class="dot"></span><span>${fmtNum(record.total_tokens)} tokens</span>` : ''}
       </div>
       ${record.prompt ? `<section class="block"><div class="block-head"><span class="label">提示词</span><span class="spacer"></span><button class="ghost-button" data-act="copy-prompt">复制</button></div><div class="prompt-text">${esc(record.prompt)}</div></section>` : ''}
@@ -2420,7 +2506,7 @@ function recordFormBody(record = {}) {
     .filter(Boolean)
     .map((value) => `<option value="${esc(value)}"></option>`)
     .join('');
-  const localTime = record.created_at_ms ? new Date(record.created_at_ms - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
+  const localTime = record.created_at_ms ? new Date(record.created_at_ms - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 19) : '';
   return `
     <section class="form-section">
       <div class="form-section-head">
@@ -2493,8 +2579,9 @@ function recordFormBody(record = {}) {
       ${uploadFieldHtml()}
       <div class="field-row">
         <div class="field">
-          <label for="f-latency">耗时（毫秒）</label>
-          <input class="input" id="f-latency" type="number" min="0" value="${record.latency_ms === null || record.latency_ms === undefined ? '' : esc(record.latency_ms)}">
+          <label for="f-latency">耗时</label>
+          <input class="input" id="f-latency" type="text" inputmode="text" autocomplete="off" placeholder="如 1:30、2m30s、45s、820ms" value="${esc(durationInputValue(record.latency_ms))}">
+          <span class="hint" id="f-latency-hint"></span>
         </div>
         <div class="field">
           <label for="f-tokens">总 tokens</label>
@@ -2502,7 +2589,7 @@ function recordFormBody(record = {}) {
         </div>
         <div class="field">
           <label for="f-time">记录时间 <em class="label-note">留空则用当前时间</em></label>
-          <input class="input" id="f-time" type="datetime-local" value="${esc(localTime)}">
+          <input class="input" id="f-time" type="datetime-local" step="1" value="${esc(localTime)}">
         </div>
       </div>
       <div class="field">
@@ -2512,7 +2599,25 @@ function recordFormBody(record = {}) {
     </section>`;
 }
 
-function readForm() {
+/** 耗时输入框的实时回显：纯数字按秒算，要毫秒就写 820ms */
+function refreshLatencyHint() {
+  const input = $('#f-latency');
+  const hint = $('#f-latency-hint');
+  if (!input || !hint) return;
+  const ms = parseDuration(input.value, 's');
+  const bad = Number.isNaN(ms);
+  input.classList.toggle('is-invalid', bad);
+  hint.classList.toggle('is-error', bad);
+  if (bad) hint.textContent = '看不懂这个时长，试试 1:30、2m30s、45s、820ms';
+  else if (ms === null) hint.textContent = '纯数字按秒算，也可以写 1:30、2m30s、820ms';
+  else hint.textContent = `= ${fmtDuration(ms)}（${fmtNum(ms)} ms）`;
+}
+
+/**
+ * 读取表单。mode 为 'create' | 'edit'；initial 是打开表单时耗时 / 记录时间 / 总 tokens 输入框的初始状态，
+ * 编辑时没改过的字段不发，避免把原来的毫秒精度、秒 / 毫秒抹掉。
+ */
+function readForm(mode = 'create', initial = {}) {
   const value = (id) => {
     const el = $(id);
     return el ? el.value.trim() : '';
@@ -2529,12 +2634,19 @@ function readForm() {
     batch: value('#f-batch'),
     note: value('#f-note'),
   };
+  // 耗时：表单里纯数字按秒；调用前已保证能解析
   const latency = value('#f-latency');
-  if (latency) payload.latency_ms = Number(latency);
+  if (mode === 'edit') {
+    if (latency !== (initial.latency || '')) payload.latency_ms = latency ? parseDuration(latency, 's') : null;
+  } else if (latency) {
+    payload.latency_ms = parseDuration(latency, 's');
+  }
   const tokens = value('#f-tokens');
   if (tokens) payload.total_tokens = Number(tokens);
+  else if (mode === 'edit' && initial.hadTokens) payload.total_tokens = null;
+  // 记录时间：编辑时没改就不发；清空 = 不改
   const time = value('#f-time');
-  if (time) payload.created_at = new Date(time).toISOString();
+  if (time && !(mode === 'edit' && time === initial.time)) payload.created_at = new Date(time).toISOString();
   for (const key of Object.keys(payload)) {
     if (payload[key] === '' || payload[key] === undefined) delete payload[key];
   }
@@ -2544,6 +2656,16 @@ function readForm() {
 /** 新建 / 编辑表单的公共交互：文件入口、附件增删、实时预览、保存 */
 function wireRecordForm(root, { record = null, mode = 'create' } = {}) {
   wireUploadArea(root);
+
+  // 打开时的初始状态：编辑保存时据此判断哪些字段没动过
+  const initial = {
+    latency: ($('#f-latency') || {}).value?.trim() || '',
+    time: ($('#f-time') || {}).value || '',
+    hadTokens: !!(record && record.total_tokens),
+  };
+  const latencyEl = $('#f-latency');
+  if (latencyEl) latencyEl.addEventListener('input', refreshLatencyHint);
+  refreshLatencyHint(); // 打开时先算一次回显
 
   // 一边写一边预览（HTML / Markdown），不用等保存
   const resultEl = $('#f-result');
@@ -2584,7 +2706,14 @@ function wireRecordForm(root, { record = null, mode = 'create' } = {}) {
     if (act === 'save') {
       el.disabled = true;
       try {
-        const payload = readForm();
+        const latencyInput = $('#f-latency');
+        if (latencyInput && Number.isNaN(parseDuration(latencyInput.value, 's'))) {
+          toast('看不懂耗时的写法，试试 1:30、2m30s、45s、820ms', 'error');
+          latencyInput.focus();
+          el.disabled = false;
+          return;
+        }
+        const payload = readForm(mode, initial);
 
         // 附件：编辑时先提交「保留哪些」，再追加新上传的
         if (mode === 'edit') payload.attachments = uploadState.existing;
